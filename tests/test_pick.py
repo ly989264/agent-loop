@@ -21,14 +21,14 @@ class PickTest(unittest.TestCase):
         self.assertEqual(selection.probe.exit_code, 3)
 
     def test_items_without_a_probe_and_unselectable_items_are_skipped(self):
-        selection = pick.pick(self.config, self.items, self.root)
-        probed = [run.item.id for run in selection.probes]
-        self.assertEqual(probed, ["first", "second", "third"])
+        runs = pick.run_probes(self.config, self.items, self.root)
+        self.assertEqual([run.item.id for run in runs], ["first", "second", "third"])
 
     def test_an_item_blocked_at_this_sha_is_skipped(self):
         selection = pick.pick(self.config, self.items, self.root, skip_ids={"second"})
         self.assertEqual(selection.item.id, "third")
-        self.assertNotIn("second", [run.item.id for run in selection.probes])
+        runs = pick.run_probes(self.config, self.items, self.root, skip_ids={"second"})
+        self.assertNotIn("second", [run.item.id for run in runs])
 
     def test_no_failing_probe_selects_nothing(self):
         items = backlog.load(self.config.backlog)

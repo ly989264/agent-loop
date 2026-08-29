@@ -35,7 +35,6 @@ class ProbeRun:
 class Selection:
     item: Item
     probe: ProbeRun
-    probes: Tuple[ProbeRun, ...]
 
 
 def command_cwd(config: Config, item: Item, tree: Path) -> Path:
@@ -86,5 +85,5 @@ def pick(
     runs = run_probes(config, items, tree, skip_ids)
     for run in runs:
         if run.failing:
-            return Selection(item=run.item, probe=run, probes=tuple(runs))
+            return Selection(item=run.item, probe=run)
     return None

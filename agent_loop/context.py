@@ -8,7 +8,6 @@ whose agent was answering a different question than the one recorded.
 
 from __future__ import annotations
 
-import hashlib
 import json
 from pathlib import Path
 from typing import Any, Dict, Mapping
@@ -89,7 +88,3 @@ def encode(bundle: Mapping[str, Any]) -> str:
             % (size, MAX_CONTEXT_BYTES)
         )
     return encoded
-
-
-def digest(encoded: str) -> str:
-    return hashlib.sha256(encoded.encode("utf-8")).hexdigest()
