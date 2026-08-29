@@ -15,7 +15,8 @@ autonomy levels above L1, no Docker handling.
 1  pick       run every selectable item's probe, in file order (file order is
               priority); choose the first failing one; skip items recorded
               BLOCKED at the current sha        no failing probe -> NO_ITEM
-2  worktree   git worktree add --detach <worktree_root>/<item-id> <branch>
+2  worktree   git worktree add -b explore/<item-id>
+              <worktree_root>/<item-id> <branch>
 3  worker     stripped environment, bounded bundle (backlog entry, probe output,
               cited site excerpts, design-doc section, output schema); exactly
               one repair round-trip on a malformed answer
@@ -26,7 +27,8 @@ autonomy levels above L1, no Docker handling.
 5  ledger     one JSONL line: ts, item, sha, state, reason, cost, duration_s,
               tool_versions (drift is a warning, never a gate)
 6  notify     one notification per (item, state, sha), to every configured target
-7  cleanup    the worktree and the round's temp dir, on every exit path
+7  cleanup    the worktree, its explore/ branch and the round's temp dir, on
+              every exit path
 ```
 
 Terminal states are exactly four: `PR_READY`, `BLOCKED`, `NO_ITEM`, `INFRA`.
