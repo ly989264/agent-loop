@@ -25,7 +25,6 @@ from agent_loop.states import BLOCKED, INFRA, NO_ITEM, PR_READY
 
 from support import cleanup, fake_gh, git_init, make_repo, write_script
 
-
 CONFIG = """
 branch: main
 backlog: .agent-loop/backlog.yaml
@@ -54,7 +53,6 @@ levels:
   hermetic: L1
 """
 
-
 ONE_ITEM = """
 items:
   - id: an-item
@@ -68,7 +66,6 @@ items:
     proof: "the probe exits 0 once the file is there"
 """
 
-
 TWO_ITEMS = ONE_ITEM + """\
   - id: another-item
     group: g
@@ -80,7 +77,6 @@ TWO_ITEMS = ONE_ITEM + """\
     probe: "test -f other.txt"
     proof: "the probe exits 0 once the other file is there"
 """
-
 
 PASSING_ITEM = """
 items:
@@ -94,7 +90,6 @@ items:
     probe: "exit 0"
 """
 
-
 DONE = {
     "diff_applied": True,
     "test_path": "project/tests/test_thing.py",
@@ -103,11 +98,8 @@ DONE = {
     "status": "done",
     "reason": "",
 }
-
-
 BLOCKED_ANSWER = dict(DONE, status="blocked", diff_applied=False,
                       reason="the design doc forbids it")
-
 
 FIXING_AGENT = """\
 #!/usr/bin/env python3
@@ -117,7 +109,6 @@ open("project/fixed.txt", "w").write("fixed\\n")
 print(__ANSWER__)
 """
 
-
 TALKING_AGENT = """\
 #!/usr/bin/env python3
 import sys
@@ -126,8 +117,6 @@ print(__ANSWER__)
 """
 
 # Records every call, then answers something that is not a JSON object at all.
-
-
 GARBLED_AGENT = """\
 #!/usr/bin/env python3
 import sys
@@ -138,8 +127,6 @@ print("I have applied the fix, trust me.")
 """
 
 # Writes its own pid and a grandchild's, then outlives caps.worker.wall_s.
-
-
 SLEEPING_AGENT = """\
 #!/usr/bin/env python3
 import os, subprocess, sys, time
@@ -401,6 +388,40 @@ class OpenPullRequestCapDrill(DrillCase):
         rounds = [record for record in self.records() if record.get("duration_s") is not None]
         self.assertGreaterEqual(len(rounds), 2)
         self.assertEqual(rounds[-1]["state"], NO_ITEM)
+
+
+class ForeignWorktreeLivelockDrill(DrillCase):
+    """Documents deferred behaviour (2c/4b carried livelock).
+
+    A worktree under `worktree_root` that the loop did not create makes every
+    round INFRA, at any item, until a person removes it.  The drill asserts the
+    reason names the remedy and that `once` returns rather than looping; it
+    asserts the livelock, it does not fix it.
+
+    Watched to fail with the foreign-worktree check removed from `lock.hold`:
+    the round then reaches PR_READY.
+    """
+
+    def test_a_foreign_worktree_makes_every_round_infra_and_names_the_remedy(self):
+        self.consumer(answering(FIXING_AGENT, DONE))
+        foreign = self.root / ".agent-loop" / "worktrees" / "foreign"
+        self.git("worktree", "add", "-b", "foreign", str(foreign), "main")
+        self.assertTrue(foreign.exists())
+
+        for attempt in range(2):
+            code, _ = self.once()
+            self.assertEqual((attempt, code), (attempt, 2))
+        self.assertEqual(self.states(), [INFRA, INFRA])
+        reason = self.records()[0]["reason"]
+        self.assertIn("is not this round's", reason)
+        self.assertIn("git worktree remove", reason)
+        self.assertIn(str(foreign), reason)
+
+        # nothing recovers it: the tree is still there, no round ever ran, and
+        # the repeated INFRA is deduplicated into silence after the first line
+        self.assertTrue(foreign.exists())
+        self.assertEqual(len(self.notifications()), 1)
+        self.assertEqual([name for name in self.branches() if name.startswith("explore/")], [])
 
 
 if __name__ == "__main__":
