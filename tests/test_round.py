@@ -150,6 +150,11 @@ class RoundTest(unittest.TestCase):
         self.assertEqual(records[0]["item"], "an-item")
         self.assertIsInstance(records[0]["duration_s"], float)
         self.assertIn("git", records[0]["tool_versions"])
+        # the notified round records when the notification went out; the
+        # second, deduplicated round notifies nothing and records no time for it
+        self.assertIsNotNone(records[0]["notified_at"])
+        self.assertGreaterEqual(ledger.epoch(records[0]["notified_at"]), ledger.epoch(records[0]["ts"]))
+        self.assertIsNone(records[1]["notified_at"])
 
     def test_the_worktree_is_gone_after_the_round_and_the_branch_stays_on_pr_ready(self):
         config_path = self.build(AGENT % repr(json.dumps(ANSWER)))
@@ -270,6 +275,10 @@ class RoundTest(unittest.TestCase):
         self.assertNotIn("explore/an-item", self.branches())
         body = [call for call in gh_calls(self.root) if call["argv"][1] == "create"][0]["stdin"]
         self.assertIn("project/fixed.txt", body)  # the diff explanation is real
+        # the ledger line carries the same diff-stat metrics reads later, and no
+        # pr_state - this round is L1, so nothing merged it
+        self.assertIn("project/fixed.txt", record["diff_stat"])
+        self.assertIsNone(record["pr_state"])
 
     def remote_branches(self, origin):
         return subprocess.run(["git", "branch", "--format=%(refname:short)"],
@@ -334,6 +343,7 @@ class RoundTest(unittest.TestCase):
         self.assertEqual([call["argv"] for call in merges],
                          [["pr", "merge", "https://github.com/o/r/pull/7", "--squash"]])
         self.assertTrue(self.notifications()[0].startswith("FYI "))
+        self.assertEqual(record["pr_state"], "MERGED")  # this round knows it merged, no poll needed
 
     def test_l2_leaves_a_defect_finding_open_and_asks_the_operator_in_one_line(self):
         outcome, record, merges = self.l2_round(

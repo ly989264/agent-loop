@@ -47,6 +47,21 @@ class Result:
     pr_url: Optional[str] = None
     decision: Optional[str] = None
     review_posted: bool = False
+    diff_stat: str = ""
+    pr_state: Optional[str] = None
+
+
+@dataclass(frozen=True)
+class PublishResult:
+    """What publishing produced - Stage 4b's metrics read ``diff_stat`` and
+    ``pr_state`` off the ledger line this becomes, never recomputing them."""
+
+    reason: str
+    pr_url: Optional[str] = None
+    decision: Optional[str] = None
+    review_posted: bool = False
+    diff_stat: str = ""
+    pr_state: Optional[str] = None
 
 
 def _retain(space: Workspace, item: backlog.Item) -> Optional[str]:
@@ -76,7 +91,7 @@ def _publish(
     payload: Mapping[str, Any],
     cost: Optional[float],
     outcome: verify.VerifyOutcome,
-) -> Tuple[str, Optional[str], Optional[str], bool]:
+) -> PublishResult:
     """Open or update the item's pull request, before anything is cleaned up.
 
     2a deferred 3: cleanup used to delete ``explore/<item>``, so a Stage 3 push
@@ -113,7 +128,7 @@ def _publish(
         space.keep_branch = False
         raise
     if publication.pull_request is None:
-        return publication.reason, None, None, False
+        return PublishResult(publication.reason, diff_stat=diff_stat)
     space.keep_branch = False
     findings, note, posted = _review(
         config, records, publisher, item, sha, space.branch, publication.pull_request
@@ -121,16 +136,21 @@ def _publish(
     chosen = level.decide(
         config.level(item.cost_class), findings, outcome.protected, outcome.ok
     )
+    pr_state: Optional[str] = None
     if chosen.merge:
         refusal = publisher.merge(config.root, publication.pull_request)
         note += "; merged" if not refusal else "; not merged: %s" % refusal
         if refusal:
             chosen = level.Decision(False, level.DECIDE, "the squash-merge was refused")
-    return (
+        else:
+            pr_state = "MERGED"
+    return PublishResult(
         "%s; %s; %s" % (publication.pull_request.url, note, chosen.reason),
         publication.pull_request.url,
         chosen.decision,
         posted,
+        diff_stat,
+        pr_state,
     )
 
 
@@ -242,11 +262,12 @@ def _worker_round(
         failure = _retain(space, item)
         if failure:
             return Result(INFRA, failure, result.cost)
-        published, pr_url, decision, posted = _publish(
+        published = _publish(
             config, records, space, item, sha, reason, payload, result.cost, outcome
         )
         return Result(
-            PR_READY, "%s; %s" % (reason, published), result.cost, pr_url, decision, posted
+            PR_READY, "%s; %s" % (reason, published.reason), result.cost, published.pr_url,
+            published.decision, published.review_posted, published.diff_stat, published.pr_state,
         )
 
 
@@ -264,6 +285,8 @@ def run_once(config_path: Path) -> Outcome:
     pr_url: Optional[str] = None
     decision: Optional[str] = None
     review_posted: bool = False
+    diff_stat: str = ""
+    pr_state: Optional[str] = None
     try:
         sha = head_sha(config.root, config.branch)
         with lock.hold(config.root, config.worktree_root):
@@ -285,9 +308,10 @@ def run_once(config_path: Path) -> Outcome:
                     state, reason = BLOCKED, stale
                 else:
                     result = _worker_round(config, records, selection, sha)
-                    state, reason, cost, pr_url, decision, review_posted = (
+                    state, reason, cost, pr_url, decision, review_posted, diff_stat, pr_state = (
                         result.state, result.reason, result.cost, result.pr_url,
-                        result.decision, result.review_posted)
+                        result.decision, result.review_posted, result.diff_stat,
+                        result.pr_state)
     except (ConfigError, InfraError) as exc:
         records = ledger.read(config.ledger)
         state, reason = INFRA, str(exc)
@@ -299,11 +323,21 @@ def run_once(config_path: Path) -> Outcome:
         sorted({spec.adapter for specs in config.agents.values() for spec in specs})
     )
     notified = not ledger.already_notified(records, item_id, state, sha)
+    ts = ledger.now()
+    notified_at: Optional[str] = None
+    if notified:
+        # ts is fixed before the notification goes out, so notified_at can
+        # never read as earlier than the terminal state it is timing from -
+        # Stage 4b metrics reads the gap between the two off this line.
+        notify.notify(
+            config, item=item_id, state=state, sha=sha, reason=reason, decision=decision
+        )
+        notified_at = ledger.now()
     duration = time.time() - started
     ledger.append(
         config.ledger,
         {
-            "ts": ledger.now(),
+            "ts": ts,
             "item": item_id,
             "sha": sha,
             "state": state,
@@ -315,10 +349,9 @@ def run_once(config_path: Path) -> Outcome:
             "pr_url": pr_url,
             "decision": decision,
             "review_posted": review_posted,
+            "diff_stat": diff_stat or None,
+            "pr_state": pr_state,
+            "notified_at": notified_at,
         },
     )
-    if notified:
-        notify.notify(
-            config, item=item_id, state=state, sha=sha, reason=reason, decision=decision
-        )
     return Outcome(state, item_id, reason, cost, duration, notified, pr_url)
