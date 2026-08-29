@@ -88,6 +88,18 @@ print(__ANSWER__)
 """
 
 
+GARBLED_AGENT = """\
+#!/usr/bin/env python3
+import sys
+bundle = sys.stdin.read()
+with open("__ROOT__/agent_calls.txt", "a") as handle:
+    handle.write("%d\\n" % len(bundle))
+print("I have applied the fix, trust me.")
+"""
+
+# Writes its own pid and a grandchild's, then outlives caps.worker.wall_s.
+
+
 def answering(template, answer):
     return template.replace("__ANSWER__", repr(json.dumps(answer)))
 
@@ -189,6 +201,29 @@ class RepeatDispatchDrill(DrillCase):
                          ["explore/an-item"])
         self.assertEqual(self.git("rev-list", "--count", "explore/an-item").strip(), commits)
         self.assertEqual(self.worktree_root_entries(), [])
+
+
+class MalformedWorkerDrill(DrillCase):
+    """Drill 2 - a worker that answers garbage gets exactly one repair and then
+    the round is INFRA, with nothing left behind.
+
+    Watched to fail with `invoke_with_one_repair` returning `first` before the
+    repair round-trip: the adapter is then called once, not twice.
+    """
+
+    def test_garbage_twice_is_one_repair_then_infra_and_nothing_is_left(self):
+        self.consumer(GARBLED_AGENT)
+        calls = self.root / "agent_calls.txt"
+
+        code, _ = self.once()
+        self.assertEqual(code, 2)
+        self.assertEqual(self.states(), [INFRA])
+        self.assertIn("worker returned malformed", self.records()[0]["reason"])
+        # one repair, and only one: the adapter ran exactly twice
+        self.assertEqual(len(calls.read_text().splitlines()), 2)
+        self.assertEqual(len(self.notifications()), 1)
+        self.assertEqual(self.worktree_root_entries(), [])
+        self.assertEqual([name for name in self.branches() if name.startswith("explore/")], [])
 
 
 if __name__ == "__main__":
