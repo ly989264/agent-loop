@@ -84,10 +84,10 @@ def _after_round(config: Config, state: str, non_progress: int) -> int:
     if non_progress < config.non_progress_rounds:
         return non_progress
     time.sleep(config.idle_s)
-    notify.notify(
-        config, item=None, state="IDLE", sha="",
-        reason="%d consecutive non-progress rounds; slept %ds, retrying"
-               % (non_progress, config.idle_s),
+    notify.fyi(
+        config,
+        "%d consecutive non-progress rounds; slept %ds, retrying"
+        % (non_progress, config.idle_s),
     )
     return 0
 

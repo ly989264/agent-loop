@@ -42,6 +42,16 @@ class NotifyTest(unittest.TestCase):
         self.assertIn("0123456789ab", line)
         self.assertNotIn("0123456789abcdef0", line)
 
+    def test_fyi_carries_no_state_column_and_reaches_every_target(self):
+        with contextlib.redirect_stdout(io.StringIO()) as captured:
+            text = notify.fyi(self.config, "5 consecutive non-progress rounds")
+        self.assertTrue(text.startswith("FYI"))
+        self.assertNotIn("IDLE", text)
+        self.assertIn("5 consecutive non-progress rounds", text)
+        self.assertEqual(captured.getvalue().splitlines(), [text])
+        log = (self.root / ".agent-loop" / "notifications.log").read_text().splitlines()
+        self.assertEqual(log, [text])
+
 
 if __name__ == "__main__":
     unittest.main()

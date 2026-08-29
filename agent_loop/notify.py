@@ -1,6 +1,9 @@
 """One notification per terminal state, deduplicated by (item, state, sha).
 
-Nothing else in the kernel notifies.
+``fyi()`` is the one other thing that notifies: continuous mode's non-progress
+back-off (invariant 3's four states are round outcomes, and a back-off is not
+one), so it carries no item/state/sha column and no dedup of its own - the
+caller decides when it is worth saying.
 """
 
 from __future__ import annotations
@@ -64,3 +67,11 @@ def notify(
     for target in config.notify if targets is None else targets:
         _emit(target, config.root, text)
     return text
+
+
+def fyi(config: Config, text: str, targets: Optional[Sequence[NotifyTarget]] = None) -> str:
+    """An operator line with no state column - not one of the four states."""
+    formatted = "FYI    %s" % text
+    for target in config.notify if targets is None else targets:
+        _emit(target, config.root, formatted)
+    return formatted

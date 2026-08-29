@@ -151,6 +151,10 @@ class AfterRoundTest(ModesTestBase):
         notifications = self.notifications()
         self.assertEqual(len(notifications), 1)
         self.assertIn("2 consecutive non-progress rounds", notifications[0])
+        # a non-progress back-off is not one of the four states (Stage 4b
+        # review round 1, defect): FYI with no state column, not "IDLE   ...".
+        self.assertTrue(notifications[0].startswith("FYI"))
+        self.assertNotIn("IDLE", notifications[0])
 
 
 class WaitForTriggerTest(ModesTestBase):
