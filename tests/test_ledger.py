@@ -20,16 +20,15 @@ class LedgerTest(unittest.TestCase):
             "ts": "2026-08-29T00:00:00Z", "item": "an-item", "sha": "abc",
             "state": PR_READY, "reason": "verified", "cost": 1.9,
             "duration_s": 38.0, "tool_versions": {"git": "git version 2.50.1"},
-            "notified": True,
         })
         ledger.append(self.path, {"ts": "t", "item": "b", "sha": "abc", "state": BLOCKED})
         lines = self.path.read_text().splitlines()
         self.assertEqual(len(lines), 2)
         first = json.loads(lines[0])
-        self.assertEqual(set(first), set(ledger.FIELDS) | {"notified"})
+        self.assertEqual(set(first), set(ledger.FIELDS))
         self.assertEqual(first["cost"], 1.9)
         self.assertEqual(first["tool_versions"], {"git": "git version 2.50.1"})
-        self.assertIs(json.loads(lines[1])["notified"], False)
+        self.assertEqual(json.loads(lines[1])["item"], "b")
 
     def test_reading_skips_blank_and_unparseable_lines(self):
         self.path.write_text('{"item": "a"}\n\nnot json\n{"item": "b"}\n', encoding="utf-8")
@@ -48,15 +47,15 @@ class LedgerTest(unittest.TestCase):
         self.assertEqual(ledger.blocked_at(records, "two"), {"b"})
 
     def test_notification_dedup_is_keyed_on_item_state_and_sha(self):
-        records = [{"item": "a", "sha": "one", "state": BLOCKED, "notified": True}]
+        records = [{"item": "a", "sha": "one", "state": BLOCKED}]
         self.assertTrue(ledger.already_notified(records, "a", BLOCKED, "one"))
         self.assertFalse(ledger.already_notified(records, "a", BLOCKED, "two"))
         self.assertFalse(ledger.already_notified(records, "a", PR_READY, "one"))
         self.assertFalse(ledger.already_notified(records, "b", BLOCKED, "one"))
 
-    def test_an_unnotified_line_does_not_suppress_the_notification(self):
-        records = [{"item": "a", "sha": "one", "state": BLOCKED, "notified": False}]
-        self.assertFalse(ledger.already_notified(records, "a", BLOCKED, "one"))
+    def test_a_round_with_no_item_dedups_on_the_empty_item(self):
+        self.assertTrue(ledger.already_notified(
+            [{"item": None, "sha": "one", "state": "NO_ITEM"}], None, "NO_ITEM", "one"))
 
 
 if __name__ == "__main__":

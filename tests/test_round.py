@@ -109,7 +109,7 @@ class RoundTest(unittest.TestCase):
 
         records = ledger.read(self.root / ".agent-loop" / "ledger.jsonl")
         self.assertEqual([record["state"] for record in records], [PR_READY, PR_READY])
-        self.assertEqual([record["notified"] for record in records], [True, False])
+        self.assertNotIn("notified", records[0])
         self.assertEqual(records[0]["item"], "an-item")
         self.assertIsInstance(records[0]["duration_s"], float)
         self.assertIn("git", records[0]["tool_versions"])

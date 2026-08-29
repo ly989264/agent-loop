@@ -47,7 +47,6 @@ def read(path: Path) -> List[Dict[str, Any]]:
 
 def append(path: Path, record: Dict[str, Any]) -> Dict[str, Any]:
     line = {key: record.get(key) for key in FIELDS}
-    line["notified"] = bool(record.get("notified"))
     path = Path(path)
     path.parent.mkdir(parents=True, exist_ok=True)
     with path.open("a", encoding="utf-8") as handle:
@@ -67,10 +66,13 @@ def blocked_at(records: Sequence[Dict[str, Any]], sha: str) -> Set[str]:
 def already_notified(
     records: Sequence[Dict[str, Any]], item: Optional[str], state: str, sha: str
 ) -> bool:
+    """A round emits its notification unless (item, state, sha) is already a line.
+
+    Every recorded round notified once, so the presence of the line is the record
+    of the notification and no separate flag is kept.
+    """
     key = (item or "", state, sha)
     for record in records:
-        if not record.get("notified"):
-            continue
         if (str(record.get("item") or ""), record.get("state"), record.get("sha")) == key:
             return True
     return False
