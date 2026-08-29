@@ -10,7 +10,7 @@ import os
 import subprocess
 import unittest
 
-from agent_loop import ledger, round as round_module
+from agent_loop import ledger, round as round_module, scm
 from agent_loop.states import BLOCKED, INFRA, NO_ITEM, PR_READY
 
 from support import cleanup, fake_gh, gh_calls, git_init, make_repo, origin_for, write_script
@@ -78,12 +78,37 @@ print(%s)
 """
 
 
+REVIEWER_CONFIG = CONFIG.replace(
+    "  worker:\n    - shell:%s\n",
+    "  worker:\n    - shell:%s\n  reviewer:\n    - shell:%s\n",
+).replace(
+    "caps:\n  worker:",
+    "caps:\n  reviewer:\n    wall_s: 60\n    silence_s: 30\n"
+    "    max_tokens: 1000\n  worker:",
+) + "scm: github\n"
+
+FINDINGS = {"findings": [
+    {"kind": "suggestion", "location": "project/fixed.txt:1",
+     "claim": "the file could say more", "citation": "none"}]}
+
+REVIEWING_AGENT = """\
+#!/usr/bin/env python3
+import sys
+sys.stdin.read()
+if sys.argv[1] == "reviewer":
+    print(%s)
+else:
+    open("project/fixed.txt", "w").write("fixed\\n")
+    print(%s)
+"""
+
+
 class RoundTest(unittest.TestCase):
     def build(self, agent_body, config=CONFIG):
         self.root = make_repo(config="branch: main\n", backlog=BACKLOG)
         script = write_script(self.root, "agent.py", agent_body)
         (self.root / ".agent-loop" / "config.yaml").write_text(
-            config % script, encoding="utf-8")
+            config % ((str(script),) * config.count("%s")), encoding="utf-8")
         git_init(self.root)
         return self.root / ".agent-loop" / "config.yaml"
 
@@ -250,6 +275,35 @@ class RoundTest(unittest.TestCase):
         return subprocess.run(["git", "branch", "--format=%(refname:short)"],
                               cwd=str(origin), stdout=subprocess.PIPE,
                               universal_newlines=True).stdout.split()
+
+    def test_the_reviewer_s_findings_are_posted_as_one_comment_and_only_once(self):
+        # The findings go on the pull request and nowhere else: this stage has
+        # no fix loop, so the worker never sees them.  A re-run of the same item
+        # updates the pull request and must not add a second review comment.
+        agent = REVIEWING_AGENT % (repr(json.dumps(FINDINGS)), repr(json.dumps(ANSWER)))
+        config_path = self.build(agent, config=REVIEWER_CONFIG)
+        origin_for(self.root)
+        fake_gh(self.root, [{"match": ["list"], "out": "[]"},
+                            {"match": ["create"], "out": "https://github.com/o/r/pull/7\n"},
+                            {"match": ["view"], "out": '{"comments": []}'}])
+        first = self.run_once(config_path)
+        self.assertEqual(first.state, PR_READY)
+        self.assertIn("1 finding(s), posted", first.reason)
+        comments = [call for call in gh_calls(self.root) if call["argv"][1] == "comment"]
+        self.assertEqual(len(comments), 1)
+        self.assertIn("**suggestion** at `project/fixed.txt:1`", comments[0]["stdin"])
+        self.assertIn("the file could say more", comments[0]["stdin"])
+
+        (self.root / "gh_replies.json").write_text(json.dumps(
+            [{"match": ["list"], "out": '[{"url": "https://github.com/o/r/pull/7"}]'},
+             {"match": ["view"], "out": '{"comments": [{"body": "%s"}]}' % scm.REVIEW_MARKER}]),
+            encoding="utf-8")
+        second = self.run_once(config_path)
+        self.assertEqual(second.state, PR_READY)
+        self.assertIn("already commented", second.reason)
+        self.assertEqual(
+            len([call for call in gh_calls(self.root) if call["argv"][1] == "comment"]), 1)
+        self.assertNotIn("create", [call["argv"][1] for call in gh_calls(self.root)][2:])
 
     def test_a_tool_version_change_is_a_warning_on_the_round_s_line(self):
         blocked = dict(ANSWER, status="blocked", diff_applied=False, reason="not mine to fix")

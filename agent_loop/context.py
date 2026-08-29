@@ -78,6 +78,52 @@ def build_worker_bundle(
     }
 
 
+# ROADMAP.md §0: the classes a finding must be one of, and what each costs to
+# make.  They travel with the bundle because the reviewer is told the rules
+# rather than trusted to remember them.
+FINDING_CLASSES = {
+    "contract": "violates a ROADMAP.md line or an invariant; must cite it",
+    "defect": "the deliverable does not do what it says; must show the failing case",
+    "suggestion": "anything else; recorded, never acted on in this stage",
+    "_rules": (
+        "A finding without a citation or a failing case is a suggestion. "
+        "A finding that would grow the diff is a suggestion by definition. "
+        "Ask first whether any hunk is required by nothing in the item: each "
+        "such hunk is a contract finding and comes back as remove."
+    ),
+}
+
+
+def build_reviewer_bundle(
+    *,
+    item: Item,
+    diff: str,
+    sha: str,
+    schema: Mapping[str, Any],
+) -> Dict[str, Any]:
+    """What the reviewer sees: the item, the diff, and the finding classes.
+
+    Not the worker's reasoning - §0's review rule - and not the tree, because the
+    reviewer runs read-only against the diff it is asked about.
+    """
+    return {
+        "schema_version": "agent-loop-bundle-v1",
+        "role": "reviewer",
+        "sha": sha,
+        "item": {
+            "id": item.id,
+            "group": item.group,
+            "statement": item.statement,
+            "cost_class": item.cost_class,
+            "proof": item.proof,
+            "notes": item.notes,
+        },
+        "diff": diff,
+        "finding_classes": dict(FINDING_CLASSES),
+        "output_schema": dict(schema),
+    }
+
+
 def encode(bundle: Mapping[str, Any]) -> str:
     """Encode the bundle, refusing anything over the cap."""
     encoded = json.dumps(bundle, indent=2, sort_keys=True)

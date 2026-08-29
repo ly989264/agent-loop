@@ -19,7 +19,7 @@ from .adapters import allowed_tools, build, invoke_with_one_repair
 from .config import Config
 from .context import ContextTooLarge
 from .errors import ConfigError, InfraError
-from .schemas import WORKER_OUTPUT_SCHEMA
+from .schemas import REVIEWER_OUTPUT_SCHEMA, WORKER_OUTPUT_SCHEMA
 from .states import BLOCKED, INFRA, NO_ITEM, PR_READY
 from .worktree import Workspace, commit_all, head_sha, workspace
 
@@ -101,7 +101,54 @@ def _publish(
     if publication.pull_request is None:
         return publication.reason, None
     space.keep_branch = False
-    return "%s %s" % (publication.reason, publication.pull_request.url), publication.pull_request.url
+    note = _review(config, publisher, item, sha, space.branch, publication.pull_request)
+    return (
+        "%s %s; %s" % (publication.reason, publication.pull_request.url, note),
+        publication.pull_request.url,
+    )
+
+
+def _review(
+    config: Config,
+    publisher: scm.Publisher,
+    item: backlog.Item,
+    sha: str,
+    branch: str,
+    pull_request: scm.PullRequest,
+) -> str:
+    """Ask the reviewer about the published diff and post its findings, once.
+
+    The findings are posted and nothing else: they are not fed back to the
+    worker, which in this stage has no fix loop.  A review that cannot be run
+    is said so on the round's line and never costs the round its pull request -
+    the change is already published, and losing it to a review failure would
+    lose the thing the round exists to produce.
+    """
+    try:
+        _, diff = pick.run_command("git diff %s...%s" % (sha, branch), config.root)
+        bundle = context.build_reviewer_bundle(
+            item=item, diff=diff, sha=sha, schema=REVIEWER_OUTPUT_SCHEMA
+        )
+        result = invoke_with_one_repair(
+            build(config.ladder("reviewer")[0], cwd=config.root),
+            role="reviewer",
+            bundle=context.encode(bundle),
+            schema=REVIEWER_OUTPUT_SCHEMA,
+            sandbox="read-only",
+            budget=config.budget("reviewer"),
+        )
+    except (ConfigError, InfraError, ContextTooLarge) as exc:
+        return "no review: %s" % exc
+    if result.status != "ok":
+        return "no review: reviewer returned %s" % result.status
+    findings = (result.json or {}).get("findings") or []
+    posted = publisher.comment(
+        config.root, pull_request, scm.review_comment(findings)
+    )
+    return "%d finding(s), %s" % (
+        len(findings),
+        "posted" if posted else "already commented",
+    )
 
 
 def _worker_round(config: Config, selection: pick.Selection, sha: str) -> Result:

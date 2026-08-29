@@ -23,6 +23,28 @@ WORKER_OUTPUT_SCHEMA = {
     },
 }
 
+REVIEWER_OUTPUT_SCHEMA = {
+    "type": "object",
+    "additionalProperties": False,
+    "required": ["findings"],
+    "properties": {
+        "findings": {
+            "type": "array",
+            "items": {
+                "type": "object",
+                "additionalProperties": False,
+                "required": ["kind", "location", "claim", "citation"],
+                "properties": {
+                    "kind": {"type": "string", "enum": ["contract", "defect", "suggestion"]},
+                    "location": {"type": "string"},
+                    "claim": {"type": "string"},
+                    "citation": {"type": "string"},
+                },
+            },
+        }
+    },
+}
+
 
 def validate(schema, value, path="output"):
     """Check ``value`` against the subset of JSON Schema these schemas use.
@@ -47,6 +69,14 @@ def validate(schema, value, path="output"):
                 reason = validate(sub, value[key], "%s.%s" % (path, key))
                 if reason is not None:
                     return reason
+        return None
+    if expected == "array":
+        if not isinstance(value, list):
+            return "%s is not an array" % path
+        for index, element in enumerate(value):
+            reason = validate(schema.get("items", {}), element, "%s[%d]" % (path, index))
+            if reason is not None:
+                return reason
         return None
     if expected == "boolean" and not isinstance(value, bool):
         return "%s is not a boolean" % path
