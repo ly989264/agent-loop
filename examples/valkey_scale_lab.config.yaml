@@ -31,8 +31,8 @@ verify:
 # A list is an escalation ladder. Stage 2a runs the first rung only.
 agents:
   worker:
-    - claude-code:sonnet-5
-    - claude-code:opus-5
+    - claude-code:sonnet
+    - claude-code:opus
 
 caps:
   worker:
