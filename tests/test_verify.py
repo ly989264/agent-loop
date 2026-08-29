@@ -11,13 +11,15 @@ from agent_loop.verify import failing_lines, verify
 from support import CONFIG, cleanup, git_init, make_repo, write_script
 
 # What `./gate suite product.unit` prints: a row per check, then a summary.
-# The last 800 characters of this are the six passing rows and `Status: FAIL`.
+# The forty rows after the failing one put it 2 300 bytes above the end, so
+# the last 800 characters hold passing rows and `Status: FAIL` and nothing
+# that names what failed.
 GATE_OUTPUT = "\n".join(
     ["gate run gate-20260829T095947Z-2f7ea13b", ""]
     + ["product.unit.check_%02d%sPASS  0.4s" % (n, " " * 24) for n in range(1, 13)]
     + ["product.unit.docker_runtime_contract    FAIL  3.1s"]
-    + ["product.unit.check_%02d%sPASS  0.4s" % (n, " " * 24) for n in range(13, 25)]
-    + ["", "25 checks, 24/25 passed", "Status: FAIL", ""]
+    + ["product.unit.check_%02d%sPASS  0.4s" % (n, " " * 24) for n in range(13, 53)]
+    + ["", "65 checks, 64/65 passed", "Status: FAIL", ""]
 )
 
 
