@@ -13,6 +13,34 @@ from .config import Config
 from .pick import command_cwd, run_command
 
 
+# A row or line carrying one of these names what failed.  Lower-case "fail"
+# is deliberately absent: "0 failures" is not a failing line.
+FAILURE_MARKERS = ("FAIL", "ERROR", "Error", "Traceback")
+FAILING_LINE_LIMIT = 40
+
+
+def failing_lines(output: str, limit: int = FAILING_LINE_LIMIT) -> str:
+    """The lines that name what failed, not whatever the tail happened to hold.
+
+    A suite runner prints one row per check and a short summary, so the last
+    800 characters of a failing run are the rows that passed plus `Status:
+    FAIL` - the failing check's name is above the cut and is lost.  Keeping the
+    marked lines instead makes the ledger's reason name it.  Output with no
+    marked line at all falls back to the tail, which is all there is.
+    """
+    marked = [
+        line.rstrip() for line in output.splitlines()
+        if any(marker in line for marker in FAILURE_MARKERS)
+    ]
+    if not marked:
+        return output[-800:]
+    dropped = len(marked) - limit
+    kept = marked[-limit:]
+    if dropped > 0:
+        kept.insert(0, "... %d earlier failing lines" % dropped)
+    return "\n".join(kept)
+
+
 @dataclass(frozen=True)
 class VerifyOutcome:
     ok: bool
@@ -68,7 +96,9 @@ def verify(config: Config, item: Item, tree: Path, base_sha: str) -> VerifyOutco
     exit_code, output = run_command(command, cwd)
     if exit_code != 0:
         return VerifyOutcome(
-            False, "verify command %r failed (exit %d): %s" % (command, exit_code, output[-800:])
+            False,
+            "verify command %r failed (exit %d): %s"
+            % (command, exit_code, failing_lines(output)),
         )
 
     exit_code, changed, output = changed_paths(tree, base_sha)
