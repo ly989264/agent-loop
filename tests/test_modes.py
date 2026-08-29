@@ -284,15 +284,17 @@ class RunContinuousTest(ModesTestBase):
         self.assertFalse(modes.paused(config.worktree_root))
 
 
-class LivelockRetirementTest(ModesTestBase):
-    def test_a_stuck_kept_worktree_notifies_once_then_is_ordinary_non_progress(self):
-        # 2c's deferred livelock: an uncommittable diff keeps its worktree under
-        # worktree_root, which the lock's foreign-worktree check then refuses on
-        # every later round, at any item, until a person removes it. Retired
-        # without new code: the (item, state, sha) dedup already covers "once"
-        # (item stays None, sha does not move while the round can't proceed),
-        # and the ordinary non-progress counter covers "not forever in
-        # continuous" - it counts and backs off exactly like any other INFRA.
+class KeptWorktreeLivelockTest(ModesTestBase):
+    """2c's deferred livelock: NOT retired (Stage 4b review round 1 corrected
+    the record that had claimed it was). An uncommittable diff keeps its
+    worktree under worktree_root; the lock's foreign-worktree check then
+    refuses every later round, at any item, forever, until a person removes
+    it by hand. Notifications dedup on (item, state, sha) and the stuck
+    condition is ordinary non-progress to _after_round's counter - both true,
+    neither of them recovery. No round the loop runs on its own ever clears
+    this; a fourth attempt below is exactly as stuck as the second."""
+
+    def test_notifications_dedup_but_the_loop_never_recovers_on_its_own(self):
         from agent_loop import round as round_module
 
         config_path = self.build()
@@ -304,24 +306,30 @@ class LivelockRetirementTest(ModesTestBase):
             first = round_module.run_once(config_path)   # picks an-item, fails to commit
             second = round_module.run_once(config_path)  # lock refuses the kept worktree
             third = round_module.run_once(config_path)   # same refusal, same sha, same item (None)
-        self.assertEqual((first.state, second.state, third.state), (INFRA, INFRA, INFRA))
-        self.assertIn("is not this round's", second.reason)
-        self.assertIn("is not this round's", third.reason)
+            fourth = round_module.run_once(config_path)  # still stuck - nothing recovered it
+        self.assertEqual(
+            (first.state, second.state, third.state, fourth.state), (INFRA,) * 4)
+        for outcome in (second, third, fourth):
+            self.assertIn("is not this round's", outcome.reason)
         # the first is a distinct (item, state, sha) from the lock refusals that
         # follow it, so it notifies once too - that transition is real news.
-        # The lock refusal's own steady state then dedups on (None, INFRA, sha).
+        # The lock refusal's own steady state then dedups on (None, INFRA, sha)
+        # for every attempt after the second - deduplication, not recovery.
         self.assertTrue(first.notified)
         self.assertTrue(second.notified)
         self.assertFalse(third.notified)
+        self.assertFalse(fourth.notified)
 
         config = config_module.load(config_path)
         self.assertEqual(config.non_progress_rounds, 2)
         non_progress = 0
-        for outcome in (first, second, third):
+        for outcome in (first, second, third, fourth):
             non_progress = modes._after_round(config, outcome.state, non_progress)
-        # 1, then 2 caps out (one backoff FYI, reset), then 1 again - ordinary
-        # counting throughout, no special case for this condition
-        self.assertEqual(non_progress, 1)
+        # 1, 2 caps out (one backoff FYI, reset), 1, 2 caps out again - ordinary
+        # counting and periodic backoff, on and on; still stuck, still burning
+        # rounds, and the worktree is still there under worktree_root.
+        self.assertEqual(non_progress, 0)
+        self.assertTrue((self.root / ".agent-loop" / "worktrees" / "an-item").exists())
 
 
 class TouchesPlumbingTest(unittest.TestCase):
