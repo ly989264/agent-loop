@@ -63,7 +63,7 @@ def _worker_round(config: Config, selection: pick.Selection, sha: str) -> Tuple[
         payload: Dict[str, Any] = result.json or {}
         if payload.get("status") == "blocked":
             return BLOCKED, "worker blocked: %s" % payload.get("reason", ""), result.cost
-        outcome = verify.verify(config, item, space.tree)
+        outcome = verify.verify(config, item, space.tree, sha)
         if not outcome.ok:
             return BLOCKED, outcome.reason, result.cost
         evidence = payload.get("mutation_evidence") or {}

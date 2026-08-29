@@ -22,7 +22,8 @@ autonomy levels above L1, no Docker handling.
               one repair round-trip on a malformed answer
                                                  malformed/timeout/refused -> INFRA
 4  verify     the probe now exits 0; the cost class's verify command passes; no
-              protected path appears in `git diff --name-only`
+              protected path is among the paths the round touched - committed,
+              modified, added or untracked, against the sha it started from
                                                  any of the three fails -> BLOCKED
 5  ledger     one JSONL line: ts, item, sha, state, reason, cost, duration_s,
               tool_versions (drift is a warning, never a gate)

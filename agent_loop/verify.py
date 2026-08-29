@@ -19,6 +19,32 @@ class VerifyOutcome:
     reason: str
 
 
+def changed_paths(tree: Path, base_sha: str) -> Tuple[int, Sequence[str], str]:
+    """Every path this round touched: committed, modified, added or untracked.
+
+    ``git diff --name-only`` alone sees neither a file the worker committed nor
+    one it created, so a new project/schemas/*.json would pass unnoticed.
+    """
+    names = []
+    exit_code, output = run_command("git diff --name-only %s" % base_sha, tree)
+    if exit_code != 0:
+        return exit_code, names, output
+    names.extend(line.strip() for line in output.splitlines() if line.strip())
+    exit_code, output = run_command("git status --porcelain --untracked-files=all", tree)
+    if exit_code != 0:
+        return exit_code, names, output
+    for line in output.splitlines():
+        if not line.strip():
+            continue
+        name = line[3:].strip() if len(line) > 3 else ""
+        if " -> " in name:
+            name = name.split(" -> ", 1)[1]
+        name = name.strip('"')
+        if name:
+            names.append(name)
+    return 0, sorted(set(names)), ""
+
+
 def touched_protected_paths(
     changed: Sequence[str], protected: Sequence[str]
 ) -> Tuple[str, ...]:
@@ -31,7 +57,7 @@ def touched_protected_paths(
     return tuple(hits)
 
 
-def verify(config: Config, item: Item, tree: Path) -> VerifyOutcome:
+def verify(config: Config, item: Item, tree: Path, base_sha: str) -> VerifyOutcome:
     cwd = command_cwd(config, item, tree)
 
     exit_code, output = run_command(item.probe or "false", cwd)
@@ -45,10 +71,9 @@ def verify(config: Config, item: Item, tree: Path) -> VerifyOutcome:
             False, "verify command %r failed (exit %d): %s" % (command, exit_code, output[-800:])
         )
 
-    exit_code, output = run_command("git diff --name-only", tree)
+    exit_code, changed, output = changed_paths(tree, base_sha)
     if exit_code != 0:
         return VerifyOutcome(False, "cannot read the round's diff: %s" % output[-800:])
-    changed = [line.strip() for line in output.splitlines() if line.strip()]
     hits = touched_protected_paths(changed, config.protected_paths)
     if hits:
         return VerifyOutcome(False, "diff touches protected paths: %s" % ", ".join(hits))
