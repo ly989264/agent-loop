@@ -21,11 +21,14 @@ from .errors import InfraError
 EXPLORE_PREFIX = "explore/"
 
 
-@dataclass(frozen=True)
+@dataclass
 class Workspace:
     tree: Path
     temp_dir: Optional[Path] = None
     branch: str = ""
+    # Set by the round once it has something worth inspecting: the worktree
+    # and temp dir still go, the explore/ branch stays.
+    keep_branch: bool = False
 
 
 def _git(argv: Sequence[str], cwd: Path, timeout: int = 120) -> subprocess.CompletedProcess:
@@ -54,6 +57,8 @@ def remove(repo_root: Path, workspace: Workspace, worktree_root: Path) -> None:
 
     Nothing else: a path outside the configured worktree root and a branch
     outside the explore/ prefix are this round's to touch only if it made them.
+    A workspace marked ``keep_branch`` keeps its explore/ branch, so a
+    PR_READY result leaves a diff to inspect after the worktree is gone.
     """
     root = worktree_root.resolve()
     tree = workspace.tree.resolve()
@@ -63,7 +68,7 @@ def remove(repo_root: Path, workspace: Workspace, worktree_root: Path) -> None:
         if tree.exists():
             shutil.rmtree(tree, ignore_errors=True)
         _git(["worktree", "prune"], repo_root)
-        if workspace.branch.startswith(EXPLORE_PREFIX):
+        if workspace.branch.startswith(EXPLORE_PREFIX) and not workspace.keep_branch:
             _git(["branch", "-D", workspace.branch], repo_root)
     if workspace.temp_dir is None:
         return

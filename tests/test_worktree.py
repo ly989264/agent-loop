@@ -42,6 +42,22 @@ class WorktreeTest(unittest.TestCase):
         with workspace(self.root, "main", self.worktree_root, "an-item") as space:
             self.assertEqual(space.branch, "explore/an-item")
 
+    def test_a_kept_branch_survives_cleanup_while_the_worktree_goes(self):
+        with workspace(self.root, "main", self.worktree_root, "an-item") as space:
+            (space.tree / "fix.txt").write_text("fixed", encoding="utf-8")
+            subprocess.run(["git", "add", "fix.txt"], cwd=str(space.tree), check=True)
+            subprocess.run(["git", "-c", "user.name=t", "-c", "user.email=t@t",
+                            "commit", "-q", "-m", "fix"], cwd=str(space.tree), check=True)
+            space.keep_branch = True
+            tree, temp_dir = space.tree, space.temp_dir
+        self.assertFalse(tree.exists())
+        self.assertFalse(temp_dir.exists())
+        self.assertIn("explore/an-item", self.branches())
+        shown = subprocess.run(["git", "show", "--stat", "--format=", "explore/an-item"],
+                               cwd=str(self.root), stdout=subprocess.PIPE,
+                               universal_newlines=True).stdout
+        self.assertIn("fix.txt", shown)
+
     def test_the_worktree_is_removed_when_the_round_fails(self):
         with self.assertRaises(RuntimeError):
             with workspace(self.root, "main", self.worktree_root, "an-item") as space:

@@ -5,6 +5,7 @@ the ledger line, and the notification deduplicated by (item, state, sha).
 import contextlib
 import io
 import json
+import subprocess
 import unittest
 
 from agent_loop import ledger, round as round_module
@@ -102,6 +103,11 @@ class RoundTest(unittest.TestCase):
         self.assertTrue(first.notified)
         self.assertEqual(len(self.notifications()), 1)
 
+        # PR_READY keeps explore/an-item for inspection, and a round on the
+        # same item refuses to overwrite it; clear it so this second round
+        # reaches the same state and exercises the notification dedup.
+        subprocess.run(["git", "branch", "-D", "explore/an-item"], cwd=str(self.root),
+                       check=True, stdout=subprocess.DEVNULL)
         second = self.run_once(config_path)
         self.assertEqual(second.state, PR_READY)
         self.assertFalse(second.notified)
@@ -114,10 +120,17 @@ class RoundTest(unittest.TestCase):
         self.assertIsInstance(records[0]["duration_s"], float)
         self.assertIn("git", records[0]["tool_versions"])
 
-    def test_the_worktree_is_gone_after_the_round(self):
+    def test_the_worktree_is_gone_after_the_round_and_the_branch_stays_on_pr_ready(self):
         config_path = self.build(AGENT % repr(json.dumps(ANSWER)))
         self.run_once(config_path)
         self.assertEqual(list((self.root / ".agent-loop" / "worktrees").iterdir()), [])
+        branches = subprocess.run(["git", "branch", "--format=%(refname:short)"],
+                                  cwd=str(self.root), stdout=subprocess.PIPE,
+                                  universal_newlines=True).stdout.split()
+        self.assertIn("explore/an-item", branches)
+        again = self.run_once(config_path)
+        self.assertEqual(again.state, INFRA)
+        self.assertIn("explore/an-item", again.reason)
 
     def test_an_unexpected_failure_still_ends_in_a_state_with_a_line(self):
         config_path = self.build(AGENT % repr(json.dumps(ANSWER)))

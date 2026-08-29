@@ -73,6 +73,7 @@ def _worker_round(config: Config, selection: pick.Selection, sha: str) -> Tuple[
             evidence.get("reverted_command"),
             evidence.get("observed_failure_line"),
         )
+        space.keep_branch = True
         return PR_READY, reason, result.cost
 
 
