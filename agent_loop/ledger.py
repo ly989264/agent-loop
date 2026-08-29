@@ -104,18 +104,3 @@ def tool_versions(adapters: Sequence[str] = ()) -> Dict[str, str]:
         elif adapter == "codex":
             versions["codex"] = _version(["codex", "--version"])
     return versions
-
-
-def drift(records: Sequence[Dict[str, Any]], versions: Dict[str, str]) -> Optional[str]:
-    """A warning only: tool drift is reported and never gates a round."""
-    for record in reversed(records):
-        previous = record.get("tool_versions")
-        if not isinstance(previous, dict):
-            continue
-        changed = [
-            "%s %s -> %s" % (name, previous.get(name), versions.get(name))
-            for name in sorted(set(previous) | set(versions))
-            if previous.get(name) != versions.get(name)
-        ]
-        return "tool version drift since the last round: " + "; ".join(changed) if changed else None
-    return None

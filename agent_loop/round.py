@@ -12,7 +12,7 @@ from __future__ import annotations
 import time
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Dict, Optional, Tuple
 
 from . import backlog, config as config_module, context, ledger, notify, pick, verify
 from .adapters import build, invoke_with_one_repair
@@ -32,7 +32,6 @@ class Outcome:
     cost: Optional[float]
     duration_s: float
     notified: bool
-    warnings: Tuple[str, ...] = ()
 
 
 def _worker_round(config: Config, selection: pick.Selection, sha: str) -> Tuple[str, str, Optional[float]]:
@@ -79,7 +78,6 @@ def _worker_round(config: Config, selection: pick.Selection, sha: str) -> Tuple[
 
 def run_once(config_path: Path) -> Outcome:
     started = time.time()
-    warnings: List[str] = []
     try:
         config = config_module.load(config_path)
     except ConfigError as exc:
@@ -103,10 +101,9 @@ def run_once(config_path: Path) -> Outcome:
         records = ledger.read(config.ledger)
         state, reason = INFRA, str(exc)
 
-    versions = ledger.tool_versions(sorted({spec.adapter for specs in config.agents.values() for spec in specs}))
-    drift = ledger.drift(records, versions)
-    if drift:
-        warnings.append(drift)
+    versions = ledger.tool_versions(
+        sorted({spec.adapter for specs in config.agents.values() for spec in specs})
+    )
     notified = not ledger.already_notified(records, item_id, state, sha)
     duration = time.time() - started
     ledger.append(
@@ -125,6 +122,4 @@ def run_once(config_path: Path) -> Outcome:
     )
     if notified:
         notify.notify(config, item=item_id, state=state, sha=sha, reason=reason)
-    for warning in warnings:
-        print("warning: %s" % warning)
-    return Outcome(state, item_id, reason, cost, duration, notified, tuple(warnings))
+    return Outcome(state, item_id, reason, cost, duration, notified)

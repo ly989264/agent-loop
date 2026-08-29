@@ -58,13 +58,6 @@ class LedgerTest(unittest.TestCase):
         records = [{"item": "a", "sha": "one", "state": BLOCKED, "notified": False}]
         self.assertFalse(ledger.already_notified(records, "a", BLOCKED, "one"))
 
-    def test_tool_drift_is_a_warning_and_never_raises(self):
-        records = [{"tool_versions": {"git": "git version 2.0.0", "python3": "Python 3.9.6"}}]
-        warning = ledger.drift(records, {"git": "git version 2.50.1", "python3": "Python 3.9.6"})
-        self.assertIn("git version 2.0.0 -> git version 2.50.1", warning)
-        self.assertIsNone(ledger.drift(records, {"git": "git version 2.0.0", "python3": "Python 3.9.6"}))
-        self.assertIsNone(ledger.drift([], {"git": "x"}))
-
 
 if __name__ == "__main__":
     unittest.main()
