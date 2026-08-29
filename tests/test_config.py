@@ -67,6 +67,29 @@ class ConfigTest(unittest.TestCase):
         with self.assertRaises(ConfigError):
             self.load(CONFIG.replace("  - stdout", "  - file"))
 
+    def test_continuous_caps_default_and_are_overridable(self):
+        config = self.load()
+        self.assertEqual(config.open_prs, 3)
+        self.assertEqual(config.non_progress_rounds, 5)
+        self.assertEqual(config.poll_s, 30)
+        self.assertEqual(config.idle_s, 900)
+        self.assertEqual(config.round_wall_s, 3600)
+        overridden = self.load(CONFIG.replace(
+            "caps:\n  worker:",
+            "caps:\n  open_prs: 1\n  non_progress_rounds: 2\n  poll_s: 5\n"
+            "  idle_s: 10\n  round_wall_s: 120\n  worker:"))
+        self.assertEqual(
+            (overridden.open_prs, overridden.non_progress_rounds, overridden.poll_s,
+             overridden.idle_s, overridden.round_wall_s),
+            (1, 2, 5, 10, 120))
+        # every role-keyed budget is untouched by the new sub-keys
+        self.assertEqual(overridden.budget("worker").wall_s, 60)
+
+    def test_a_non_positive_continuous_cap_is_refused(self):
+        with self.assertRaises(ConfigError) as caught:
+            self.load(CONFIG.replace("caps:\n  worker:", "caps:\n  open_prs: 0\n  worker:"))
+        self.assertIn("open_prs", str(caught.exception))
+
 
 if __name__ == "__main__":
     unittest.main()

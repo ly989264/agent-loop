@@ -33,6 +33,16 @@ KEYS = frozenset(
     }
 )
 ROLES = ("planner", "worker", "reviewer", "diagnoser")
+# Continuous-mode caps that live beside the per-role budgets in `caps`, keyed by
+# name instead of role so a typo'd role name still trips "unknown role", not a
+# silently-ignored cap.
+CAP_DEFAULTS: Dict[str, int] = {
+    "open_prs": 3,
+    "non_progress_rounds": 5,
+    "poll_s": 30,
+    "idle_s": 900,
+    "round_wall_s": 3600,
+}
 
 
 @dataclass(frozen=True)
@@ -88,6 +98,12 @@ class Config:
     notify: Tuple[NotifyTarget, ...]
     levels: Mapping[str, str] = field(default_factory=dict)
     scm: str = scm_module.DEFAULT
+    # Continuous mode; §3 "Modes and back-pressure". Defaults in CAP_DEFAULTS.
+    open_prs: int = CAP_DEFAULTS["open_prs"]
+    non_progress_rounds: int = CAP_DEFAULTS["non_progress_rounds"]
+    poll_s: int = CAP_DEFAULTS["poll_s"]
+    idle_s: int = CAP_DEFAULTS["idle_s"]
+    round_wall_s: int = CAP_DEFAULTS["round_wall_s"]
 
     def ladder(self, role: str) -> Tuple[AgentSpec, ...]:
         if role not in self.agents:
@@ -185,12 +201,18 @@ def load(path: os.PathLike) -> Config:
     if not isinstance(caps_document, dict) or not caps_document:
         raise ConfigError("caps must be a non-empty mapping of role to budget")
     caps: Dict[str, Budget] = {}
-    for role, value in caps_document.items():
-        if role not in ROLES:
-            raise ConfigError("unknown role %r in caps" % role)
+    cap_ints: Dict[str, int] = dict(CAP_DEFAULTS)
+    for name, value in caps_document.items():
+        if name in CAP_DEFAULTS:
+            if isinstance(value, bool) or not isinstance(value, int) or value <= 0:
+                raise ConfigError("caps.%s must be a positive integer" % name)
+            cap_ints[name] = value
+            continue
+        if name not in ROLES:
+            raise ConfigError("unknown role %r in caps" % name)
         if not isinstance(value, dict) or set(value) != {"wall_s", "silence_s", "max_tokens"}:
-            raise ConfigError("caps.%s needs exactly wall_s, silence_s and max_tokens" % role)
-        caps[role] = Budget(
+            raise ConfigError("caps.%s needs exactly wall_s, silence_s and max_tokens" % name)
+        caps[name] = Budget(
             wall_s=int(value["wall_s"]),
             silence_s=int(value["silence_s"]),
             max_tokens=int(value["max_tokens"]),
@@ -232,4 +254,9 @@ def load(path: os.PathLike) -> Config:
         notify=tuple(_notify_target(target) for target in notify_document),
         levels=dict(levels_document),
         scm=str(publisher),
+        open_prs=cap_ints["open_prs"],
+        non_progress_rounds=cap_ints["non_progress_rounds"],
+        poll_s=cap_ints["poll_s"],
+        idle_s=cap_ints["idle_s"],
+        round_wall_s=cap_ints["round_wall_s"],
     )
