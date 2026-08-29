@@ -24,7 +24,7 @@ import time
 from collections import Counter
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Dict, Optional
+from typing import Dict, List, Optional, Tuple
 
 from . import config as config_module, ledger, notify, round as round_module, scm
 from .config import Config
@@ -92,6 +92,27 @@ def _after_round(config: Config, state: str, non_progress: int) -> int:
     return 0
 
 
+def _poll_open_pull_requests(config: Config, publisher: scm.Publisher) -> List[Tuple[str, str]]:
+    """Ask the forge about every pull request the ledger still shows open.
+
+    One ``gh pr view`` per known-open PR - shared by the back-pressure wait
+    and the trigger wait, since both need the ledger's ``open_pull_requests``
+    to be current, not a stale read of what a poll several rounds ago saw.
+    Returns what changed (item, new pr_state); each change is also recorded
+    via ``ledger.note_pr_state`` as a side effect.
+    """
+    changes: List[Tuple[str, str]] = []
+    if config.scm != "github":
+        return changes
+    for item, record in ledger.open_pull_requests(ledger.read(config.ledger)).items():
+        state = publisher.state(config.root, record["pr_url"])
+        if state and state != "OPEN":
+            ledger.note_pr_state(config.ledger, item=item, sha=record.get("sha") or "",
+                                 pr_url=record["pr_url"], pr_state=state)
+            changes.append((item, state))
+    return changes
+
+
 def _wait_for_trigger(config: Config, publisher: scm.Publisher, last_backlog_mtime: float) -> str:
     """Block (polling every ``caps.poll_s``) until one of §3's triggers fires."""
     deadline = time.time() + config.idle_s
@@ -103,16 +124,30 @@ def _wait_for_trigger(config: Config, publisher: scm.Publisher, last_backlog_mti
             if ledger.reopened_since(ledger.read(config.ledger), mtime):
                 return "a blocked item was reopened by editing the backlog"
             return "the backlog was edited"
-        if config.scm == "github":
-            for item, record in ledger.open_pull_requests(ledger.read(config.ledger)).items():
-                state = publisher.state(config.root, record["pr_url"])
-                if state and state != "OPEN":
-                    ledger.note_pr_state(config.ledger, item=item, sha=record.get("sha") or "",
-                                         pr_url=record["pr_url"], pr_state=state)
-                    return "pull request %s" % state.lower()
+        changes = _poll_open_pull_requests(config, publisher)
+        if changes:
+            return "pull request %s" % changes[0][1].lower()
         if time.time() >= deadline:
             return "idle timer"
         time.sleep(min(config.poll_s, max(deadline - time.time(), 0.01)))
+
+
+def _wait_while_open_prs_at_cap(
+    config: Config, publisher: scm.Publisher, stop: Optional[Stop],
+    started: float, prs_opened: int, cost_spent: float,
+) -> bool:
+    """Refresh every known-open PR's state, then wait while the cap still
+    holds. Returns True if ``stop`` was met while waiting - the caller must
+    stop the loop rather than start a round."""
+    while True:
+        _poll_open_pull_requests(config, publisher)
+        if len(ledger.open_pull_requests(ledger.read(config.ledger))) < config.open_prs:
+            return False
+        if paused(config.worktree_root):
+            return False
+        if stop is not None and _stop_met(stop, started, prs_opened, cost_spent):
+            return True
+        time.sleep(config.poll_s)
 
 
 def run_continuous(config_path: Path, stop: Optional[Stop] = None) -> int:
@@ -127,10 +162,8 @@ def run_continuous(config_path: Path, stop: Optional[Stop] = None) -> int:
     while True:
         while paused(config.worktree_root):
             time.sleep(config.poll_s)
-        while len(ledger.open_pull_requests(ledger.read(config.ledger))) >= config.open_prs:
-            if paused(config.worktree_root):
-                break
-            time.sleep(config.poll_s)
+        if _wait_while_open_prs_at_cap(config, publisher, stop, started, prs_opened, cost_spent):
+            return 0
         if paused(config.worktree_root):
             continue
 

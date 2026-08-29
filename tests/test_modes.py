@@ -206,6 +206,43 @@ class WaitForTriggerTest(ModesTestBase):
 # test_a_round_over_its_wall_cap_ends_infra_in_process_and_cleans_up.
 
 
+class OpenPrsBackpressureTest(ModesTestBase):
+    """Stage 4b review round 1, defect: the open_prs wait used to read the
+    ledger's stale pr_state and never evaluate `stop` while waiting."""
+
+    def wait(self, config, stop=None, prs_opened=0, cost_spent=0.0):
+        from agent_loop import scm
+        return modes._wait_while_open_prs_at_cap(
+            config, scm.build(config.scm), stop, time.time(), prs_opened, cost_spent)
+
+    def seed_open_pr(self, config):
+        ledger.append(config.ledger, {
+            "ts": ledger.now(), "item": "an-item", "sha": "s", "state": PR_READY,
+            "pr_url": "https://github.com/o/r/pull/7", "duration_s": 1.0,
+        })
+
+    def test_a_poll_that_finds_the_pr_merged_clears_the_cap_without_a_full_idle_wait(self):
+        config_path = self.build(config=CONFIG + "scm: github\n")
+        config = config_module.load(config_path)
+        origin_for(self.root)
+        fake_gh(self.root, [{"match": ["view"], "out": '{"state": "MERGED"}'}])
+        self.seed_open_pr(config)
+        started = time.time()
+        stopped = self.wait(config)
+        self.assertFalse(stopped)  # cap cleared - the round loop proceeds
+        self.assertLess(time.time() - started, config.poll_s)  # no sleep needed
+        self.assertEqual(ledger.read(config.ledger)[-1]["pr_state"], "MERGED")
+
+    def test_stop_is_evaluated_while_still_at_the_cap_not_only_after_a_round(self):
+        config_path = self.build(config=CONFIG + "scm: github\n")
+        config = config_module.load(config_path)
+        origin_for(self.root)
+        fake_gh(self.root, [{"match": ["view"], "out": '{"state": "OPEN"}'}])  # still open
+        self.seed_open_pr(config)
+        stopped = self.wait(config, stop=modes.Stop(hours=0.0003))  # ~1.1s
+        self.assertTrue(stopped)  # never got to start a round
+
+
 class RunContinuousTest(ModesTestBase):
     def test_until_prs_stops_after_the_first_pull_request(self):
         config_path = self.build(config=CONFIG + "scm: github\n")
