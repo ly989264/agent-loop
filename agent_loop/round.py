@@ -51,19 +51,6 @@ class Result:
     pr_state: Optional[str] = None
 
 
-@dataclass(frozen=True)
-class PublishResult:
-    """What publishing produced - Stage 4b's metrics read ``diff_stat`` and
-    ``pr_state`` off the ledger line this becomes, never recomputing them."""
-
-    reason: str
-    pr_url: Optional[str] = None
-    decision: Optional[str] = None
-    review_posted: bool = False
-    diff_stat: str = ""
-    pr_state: Optional[str] = None
-
-
 def _retain(space: Workspace, item: backlog.Item) -> Optional[str]:
     """Keep the round's diff where it can be inspected, or say why it could not.
 
@@ -91,7 +78,7 @@ def _publish(
     payload: Mapping[str, Any],
     cost: Optional[float],
     outcome: verify.VerifyOutcome,
-) -> PublishResult:
+) -> Result:
     """Open or update the item's pull request, before anything is cleaned up.
 
     2a deferred 3: cleanup used to delete ``explore/<item>``, so a Stage 3 push
@@ -128,7 +115,7 @@ def _publish(
         space.keep_branch = False
         raise
     if publication.pull_request is None:
-        return PublishResult(publication.reason, diff_stat=diff_stat)
+        return Result(PR_READY, "%s; %s" % (reason, publication.reason), cost, diff_stat=diff_stat)
     space.keep_branch = False
     findings, note, posted = _review(
         config, records, publisher, item, sha, space.branch, publication.pull_request
@@ -144,8 +131,10 @@ def _publish(
             chosen = level.Decision(False, level.DECIDE, "the squash-merge was refused")
         else:
             pr_state = "MERGED"
-    return PublishResult(
-        "%s; %s; %s" % (publication.pull_request.url, note, chosen.reason),
+    return Result(
+        PR_READY,
+        "%s; %s; %s; %s" % (reason, publication.pull_request.url, note, chosen.reason),
+        cost,
         publication.pull_request.url,
         chosen.decision,
         posted,
@@ -262,12 +251,8 @@ def _worker_round(
         failure = _retain(space, item)
         if failure:
             return Result(INFRA, failure, result.cost)
-        published = _publish(
+        return _publish(
             config, records, space, item, sha, reason, payload, result.cost, outcome
-        )
-        return Result(
-            PR_READY, "%s; %s" % (reason, published.reason), result.cost, published.pr_url,
-            published.decision, published.review_posted, published.diff_stat, published.pr_state,
         )
 
 
