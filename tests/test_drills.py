@@ -127,6 +127,17 @@ print("I have applied the fix, trust me.")
 # Writes its own pid and a grandchild's, then outlives caps.worker.wall_s.
 
 
+SLEEPING_AGENT = """\
+#!/usr/bin/env python3
+import os, subprocess, sys, time
+child = subprocess.Popen(["sleep", "60"])
+with open("__ROOT__/agent_pids.txt", "w") as handle:
+    handle.write("%d %d\\n" % (os.getpid(), child.pid))
+sys.stdin.read()
+time.sleep(60)
+"""
+
+
 def answering(template, answer):
     return template.replace("__ANSWER__", repr(json.dumps(answer)))
 
@@ -295,6 +306,52 @@ class BlockedItemDrill(DrillCase):
                             if record["state"] == BLOCKED and record["sha"] == first_sha
                             and record["item"] == "an-item"]
         self.assertEqual(len(blocked_at_first), 1)
+
+
+class KilledWorkerDrill(DrillCase):
+    """Drill 4 - a worker that outlives `caps.worker.wall_s` leaves nothing: no
+    process of its own or its children, no worktree, no explore/ branch, no
+    lock, and the next round runs.
+
+    Watched to fail with `adapters/base._terminate` calling
+    `process.terminate()` instead of `os.killpg`: the grandchild survives.
+    """
+
+    def test_a_worker_over_its_wall_cap_leaves_no_process_worktree_or_branch(self):
+        self.consumer(SLEEPING_AGENT, config=CONFIG.replace("wall_s: 60", "wall_s: 2"))
+        pids_file = self.root / "agent_pids.txt"
+
+        code, _ = self.once()
+        self.assertEqual(code, 2)
+        self.assertEqual(self.states(), [INFRA])
+        self.assertIn("worker returned timeout", self.records()[0]["reason"])
+
+        pids = [int(text) for text in pids_file.read_text().split()]
+        self.stray_pids = pids
+        self.assertEqual(len(pids), 2)  # the worker and a child of its own
+        for pid in pids:
+            self.assertFalse(self.alive_after(pid, 5.0), "pid %d outlived the round" % pid)
+
+        self.assertEqual(self.worktree_root_entries(), [])  # tree and lock both gone
+        self.assertEqual([name for name in self.branches() if name.startswith("explore/")], [])
+
+        self.rewrite_agent(answering(FIXING_AGENT, DONE))
+        code, _ = self.once()
+        self.assertEqual((code, self.states()[-1]), (0, PR_READY))
+
+    def alive_after(self, pid, seconds):
+        deadline = time.time() + seconds
+        while time.time() < deadline:
+            try:
+                os.kill(pid, 0)
+            except ProcessLookupError:
+                return False
+            time.sleep(0.05)
+        try:
+            os.kill(pid, 0)
+        except ProcessLookupError:
+            return False
+        return True
 
 
 if __name__ == "__main__":
