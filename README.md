@@ -81,11 +81,13 @@ agent-loop run --config <consumer>/.agent-loop/config.yaml --mode continuous
 agent-loop run --config <consumer>/.agent-loop/config.yaml --mode until --until-prs 3
 ```
 
-Each round of a driven mode runs as a subprocess of `agent-loop run --mode
-once`, bounded by `caps.round_wall_s`: a round still going at the cap is
-killed (its whole process group, so a worker or verify command it started
-goes too) and the ledger gets an `INFRA` line naming the cap, since the round
-itself never reached its own.
+Each round of a driven mode calls `round.run_once` directly, in-process - no
+subprocess, no daemon. `caps.round_wall_s` is enforced inside `run_once`
+itself (a `signal.alarm`): a round still going at the cap raises the same
+`InfraError` any other one would, so it takes the exact path a normal failure
+does - the worktree it started is removed by the existing cleanup, one
+ledger line is written, one notification goes out, deduplicated the same as
+always.
 
 ## Back-pressure
 
