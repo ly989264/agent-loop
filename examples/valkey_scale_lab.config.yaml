@@ -1,0 +1,52 @@
+# agent-loop configuration for valkey-scale-lab.
+#
+# Install as <valkey_scale_lab>/.agent-loop/config.yaml. Every path in it is
+# relative to the repository root, which the kernel takes to be the parent of
+# the .agent-loop directory this file sits in.
+
+branch: fast-iter
+backlog: .agent-loop/backlog.yaml
+worktree_root: .agent-loop/worktrees
+ledger: .agent-loop/ledger.jsonl
+
+# ROADMAP.md §3 critical point 2: a diff touching any of these is never merged
+# by the loop. The verify step turns one into BLOCKED with the paths named.
+protected_paths:
+  - project/schemas
+  - project/docs/scalable_cluster_observability_design.md
+  - project/artifacts/baselines
+  - project/catalog.json
+  - project/verification
+
+# One command per cost class. `cwd` is where this project's own commands run,
+# and the probes of items in that class run there too. A cost class with no
+# entry here cannot be verified, so a round that picks one ends INFRA rather
+# than guessing: docker-exact-50's exact-50 run and delta-shape diff are
+# Stage 2c and are deliberately absent.
+verify:
+  hermetic:
+    cwd: project
+    command: ./gate suite product.unit
+
+# A list is an escalation ladder. Stage 2a runs the first rung only.
+agents:
+  worker:
+    - claude-code:sonnet-5
+    - claude-code:opus-5
+
+caps:
+  worker:
+    wall_s: 1800
+    silence_s: 300
+    max_tokens: 200000
+
+notify:
+  - stdout
+  - target: file
+    path: .agent-loop/notifications.log
+  - macos
+
+# Only L1 is implemented; L2/L3 are Stage 3 and Stage 4.
+levels:
+  hermetic: L1
+  docker-exact-50: L1
