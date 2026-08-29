@@ -1,4 +1,5 @@
 import json
+import os
 import time
 import unittest
 
@@ -48,6 +49,40 @@ class AdapterDispatchTest(unittest.TestCase):
     def test_an_unknown_adapter_is_refused(self):
         with self.assertRaises(ConfigError):
             build(AgentSpec.parse("gemini"))
+
+
+FAKE_CLAUDE = """\
+#!/usr/bin/env python3
+import json, sys
+sys.stdin.read()
+assert "stream-json" in sys.argv, sys.argv
+print(json.dumps({"type": "system", "subtype": "init"}))
+print(json.dumps({"type": "assistant", "message": {"content": [{"type": "text", "text": "working"}]}}))
+print(json.dumps({"type": "result", "subtype": "success", "is_error": False,
+                  "total_cost_usd": 0.5, "result": "```json\\n" + %s + "\\n```"}))
+"""
+
+
+class ClaudeCodeAdapterTest(unittest.TestCase):
+    def setUp(self):
+        self.root = make_repo()
+        self.budget = Budget(wall_s=30, silence_s=15, max_tokens=1000)
+        self.path = os.environ.get("PATH", "")
+
+    def tearDown(self):
+        os.environ["PATH"] = self.path
+        cleanup(self.root)
+
+    def test_the_answer_is_the_streamed_result_event(self):
+        (self.root / "bin").mkdir()
+        write_script(self.root, "bin/claude", FAKE_CLAUDE % repr(json.dumps(ANSWER)))
+        os.environ["PATH"] = "%s:%s" % (self.root / "bin", self.path)
+        adapter = build(AgentSpec.parse("claude-code:sonnet"), cwd=self.root)
+        result = adapter.run("worker", "bundle", WORKER_OUTPUT_SCHEMA, "worktree-write", self.budget)
+        self.assertEqual(result.status, "ok", result.raw_tail)
+        self.assertEqual(result.json, ANSWER)
+        self.assertEqual(result.cost, 0.5)
+        self.assertIn('"type": "system"', result.raw_tail)
 
 
 class ShellAdapterTest(unittest.TestCase):

@@ -27,7 +27,7 @@ from ..schemas import validate
 
 SANDBOXES = ("read-only", "worktree-write")
 TAIL_LINES = 200
-TAIL_LINE_BYTES = 4_000
+TAIL_LINE_BYTES = 64_000  # a streamed result envelope with modelUsage passes 4 KB
 REPAIR_ECHO_BYTES = 8_192
 
 
