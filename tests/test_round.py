@@ -6,6 +6,7 @@ import contextlib
 import dataclasses
 import io
 import json
+import os
 import subprocess
 import unittest
 
@@ -167,6 +168,20 @@ class RoundTest(unittest.TestCase):
         self.assertIn("explore/an-item", branches)
         tree = self.root / ".agent-loop" / "worktrees" / "an-item"
         self.assertTrue((tree / "project" / "fixed.txt").exists())
+
+    def test_a_held_lock_ends_the_round_infra_before_anything_is_picked(self):
+        config_path = self.build(AGENT % repr(json.dumps(ANSWER)))
+        worktrees = self.root / ".agent-loop" / "worktrees"
+        worktrees.mkdir(parents=True, exist_ok=True)
+        (worktrees / ".lock").write_text(
+            json.dumps({"pid": os.getpid(), "since": "2026-08-29T00:00:00Z"}), encoding="utf-8")
+        outcome = self.run_once(config_path)
+        self.assertEqual(outcome.state, INFRA)
+        self.assertIn("another round holds", outcome.reason)
+        self.assertEqual([record["state"] for record in
+                          ledger.read(self.root / ".agent-loop" / "ledger.jsonl")], [INFRA])
+        self.assertEqual([path.name for path in worktrees.iterdir()], [".lock"])
+        self.assertNotIn("explore/an-item", self.branches())
 
     def test_an_unexpected_failure_still_ends_in_a_state_with_a_line(self):
         config_path = self.build(AGENT % repr(json.dumps(ANSWER)))

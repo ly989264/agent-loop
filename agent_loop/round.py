@@ -14,7 +14,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Dict, Optional, Tuple
 
-from . import backlog, config as config_module, context, ledger, notify, pick, verify
+from . import backlog, config as config_module, context, ledger, lock, notify, pick, verify
 from .adapters import allowed_tools, build, invoke_with_one_repair
 from .config import Config
 from .context import ContextTooLarge
@@ -121,14 +121,15 @@ def run_once(config_path: Path) -> Outcome:
     cost: Optional[float] = None
     try:
         sha = head_sha(config.root, config.branch)
-        items = backlog.load(config.backlog)
-        records = ledger.read(config.ledger)
-        selection = pick.pick(config, items, config.root, ledger.blocked_at(records, sha))
-        if selection is None:
-            state, reason = NO_ITEM, "all selectable probes pass"
-        else:
-            item_id = selection.item.id
-            state, reason, cost = _worker_round(config, selection, sha)
+        with lock.hold(config.root, config.worktree_root):
+            items = backlog.load(config.backlog)
+            records = ledger.read(config.ledger)
+            selection = pick.pick(config, items, config.root, ledger.blocked_at(records, sha))
+            if selection is None:
+                state, reason = NO_ITEM, "all selectable probes pass"
+            else:
+                item_id = selection.item.id
+                state, reason, cost = _worker_round(config, selection, sha)
     except (ConfigError, InfraError) as exc:
         records = ledger.read(config.ledger)
         state, reason = INFRA, str(exc)

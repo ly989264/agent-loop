@@ -13,7 +13,7 @@ import tempfile
 from contextlib import contextmanager
 from dataclasses import dataclass, replace
 from pathlib import Path
-from typing import Iterator, Optional, Sequence
+from typing import Iterator, Optional, Sequence, Tuple
 
 from .errors import InfraError
 
@@ -53,6 +53,26 @@ def head_sha(repo_root: Path, branch: str) -> str:
     if result.returncode != 0:
         raise InfraError("cannot resolve branch %r: %s" % (branch, result.stdout.strip()))
     return result.stdout.strip()
+
+
+def worktrees_under(repo_root: Path, worktree_root: Path) -> Tuple[str, ...]:
+    """Registered worktrees living under this round's worktree root.
+
+    Taken before the round makes its own, so anything listed belongs to another
+    round or to a person: this round removes only what it created.
+    """
+    result = _git(["worktree", "list", "--porcelain"], repo_root)
+    if result.returncode != 0:
+        raise InfraError("cannot list worktrees: %s" % result.stdout.strip())
+    root = worktree_root.resolve()
+    found = []
+    for line in result.stdout.splitlines():
+        if not line.startswith("worktree "):
+            continue
+        tree = Path(line[len("worktree "):].strip()).resolve()
+        if tree != root and root in tree.parents:
+            found.append(str(tree))
+    return tuple(found)
 
 
 def commit_all(tree: Path, message: str) -> None:
