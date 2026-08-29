@@ -6,8 +6,10 @@ a throwaway worktree, verifies the result, writes one ledger line and sends one
 notification. The kernel is generic; every project-specific fact lives in the
 consumer's `.agent-loop/config.yaml` and `.agent-loop/backlog.yaml`.
 
-This is Stage 3 of the exploration-loop roadmap: mode `once`, autonomy levels
-L1 and L2, no Docker handling.
+This is Stage 4b of the exploration-loop roadmap: modes `continuous`,
+`schedule` and `until` around the `once` round from Stage 2, back-pressure,
+pause/resume, and ledger-only metrics. Autonomy levels are L1 and L2 (Stage
+3), no Docker handling.
 
 ## The round
 
@@ -39,7 +41,7 @@ L1 and L2, no Docker handling.
               answered in 24 h makes the next round on that item BLOCKED
 8  ledger     one JSONL line: ts, item, sha, state, reason, cost, duration_s,
               tool_versions (drift is a warning, never a gate), pr_url,
-              decision, review_posted
+              decision, review_posted, diff_stat, pr_state, notified_at
 9  notify     one notification per (item, state, sha), to every configured
               target, prefixed FYI or DECIDE where the round has a question
 10 cleanup    the worktree, the round's temp dir, and the explore/ branch once
@@ -58,8 +60,67 @@ agent-loop run --config <consumer>/.agent-loop/config.yaml --mode once
 agent-loop status --config <consumer>/.agent-loop/config.yaml
 ```
 
-`run` exits 0 for `PR_READY` and `NO_ITEM`, 1 for `BLOCKED`, 2 for `INFRA`.
-`once` is the only mode.
+`run` exits 0 for `PR_READY` and `NO_ITEM`, 1 for `BLOCKED`, 2 for `INFRA`; a
+driven mode (`continuous`/`until`) exits 0 when it stops itself.
+
+## Modes
+
+`once` is a single round, unchanged since Stage 2. `continuous` runs a round,
+then waits (polling `caps.poll_s`, no daemon) for a trigger before running the
+next: the backlog file's mtime changing, a pull request the ledger still shows
+open turning out to be merged or closed (`gh pr view`, only when `scm: github`
+is configured), a BLOCKED item whose ledger line predates the backlog's last
+edit ("reopened" by editing it), or the `caps.idle_s` idle timer. `schedule`
+is `once` under cron's name - nothing else is different, so it is the same
+code path. `until` is `continuous` with one or more stop conditions -
+`--until-prs N`, `--until-hours H`, `--until-cost C` - the loop stops itself
+the moment any one is met:
+
+```bash
+agent-loop run --config <consumer>/.agent-loop/config.yaml --mode continuous
+agent-loop run --config <consumer>/.agent-loop/config.yaml --mode until --until-prs 3
+```
+
+Each round of a driven mode runs as a subprocess of `agent-loop run --mode
+once`, bounded by `caps.round_wall_s`: a round still going at the cap is
+killed (its whole process group, so a worker or verify command it started
+goes too) and the ledger gets an `INFRA` line naming the cap, since the round
+itself never reached its own.
+
+## Back-pressure
+
+Two more `caps` keys, read only by `continuous`/`until`: `open_prs` (default
+3) - a round is not started while the ledger shows that many `PR_READY` items
+whose pull requests are still open; `non_progress_rounds` (default 5) - after
+that many consecutive `NO_ITEM`/`INFRA` rounds, the loop sleeps `caps.idle_s`,
+sends one `FYI` naming the count, and resets. Neither is a fifth terminal
+state or a new notification kind.
+
+## Pause and resume
+
+```bash
+agent-loop pause --config <consumer>/.agent-loop/config.yaml
+agent-loop resume --config <consumer>/.agent-loop/config.yaml
+```
+
+`pause` drops a flag file under `worktree_root`; `continuous`/`until` check it
+before every round and idle (polling `caps.poll_s`) rather than starting one
+while it is there. `resume` removes it. `status` shows which state it is in.
+
+## Metrics
+
+```bash
+agent-loop metrics --config <consumer>/.agent-loop/config.yaml
+```
+
+Text, read from the ledger alone - no chart, no new file: rounds by state;
+pull requests opened and merged (merged is known once a round's own L2 merge
+succeeds, or a `continuous`/`until` trigger poll later observes it - either
+way the ledger line carries `pr_state`); the plumbing share (pull requests
+whose diff touched `.agent-loop/`, read back off the `diff_stat` each `PR_READY`
+line already carries, against every other pull request); the median time from
+a round's terminal state to its notification (`ts` vs. the same line's
+`notified_at`); and cost per merged pull request.
 
 ## Config keys
 
@@ -77,7 +138,7 @@ rather than ignored.
 | `protected_paths` | a diff touching one of these is BLOCKED |
 | `verify` | per cost class: `command`, and the `cwd` its commands run in — the class's probes run there too |
 | `agents` | per role (`planner`/`worker`/`reviewer`/`diagnoser`): `adapter[:model]`, a list being an escalation ladder |
-| `caps` | per role: `wall_s`, `silence_s`, `max_tokens` |
+| `caps` | per role: `wall_s`, `silence_s`, `max_tokens`; plus five continuous-mode keys keyed by name, not role: `poll_s` (default 30), `idle_s` (900), `open_prs` (3), `non_progress_rounds` (5), `round_wall_s` (3600) |
 | `notify` | `stdout`, `macos`, or `{target: file, path: ...}` |
 | `levels` | per cost class; `L1` (a person merges) or `L2` (the loop may merge) |
 | `scm` | `github` (push, open or update the PR, one review comment, squash-merge) or `local-only` (the default: no forge) |
