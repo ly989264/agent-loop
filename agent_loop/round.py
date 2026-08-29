@@ -21,7 +21,7 @@ from .context import ContextTooLarge
 from .errors import ConfigError, InfraError
 from .schemas import WORKER_OUTPUT_SCHEMA
 from .states import BLOCKED, INFRA, NO_ITEM, PR_READY
-from .worktree import head_sha, workspace
+from .worktree import commit_all, head_sha, workspace
 
 
 @dataclass(frozen=True)
@@ -73,6 +73,7 @@ def _worker_round(config: Config, selection: pick.Selection, sha: str) -> Tuple[
             evidence.get("reverted_command"),
             evidence.get("observed_failure_line"),
         )
+        commit_all(space.tree, "agent-loop: %s" % item.id)
         space.keep_branch = True
         return PR_READY, reason, result.cost
 

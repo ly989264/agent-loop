@@ -128,6 +128,12 @@ class RoundTest(unittest.TestCase):
                                   cwd=str(self.root), stdout=subprocess.PIPE,
                                   universal_newlines=True).stdout.split()
         self.assertIn("explore/an-item", branches)
+        # the worker's uncommitted diff is on the branch, not lost with the tree
+        shown = subprocess.run(["git", "show", "--stat", "--format=%s", "explore/an-item"],
+                               cwd=str(self.root), stdout=subprocess.PIPE,
+                               universal_newlines=True).stdout
+        self.assertIn("agent-loop: an-item", shown)
+        self.assertIn("project/fixed.txt", shown)
         again = self.run_once(config_path)
         self.assertEqual(again.state, INFRA)
         self.assertIn("explore/an-item", again.reason)

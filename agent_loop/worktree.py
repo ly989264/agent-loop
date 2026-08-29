@@ -52,6 +52,25 @@ def head_sha(repo_root: Path, branch: str) -> str:
     return result.stdout.strip()
 
 
+def commit_all(tree: Path, message: str) -> None:
+    """Commit everything the round changed in ``tree`` onto its branch.
+
+    A worker leaves its diff in the working tree; ``worktree remove --force``
+    would drop it, and a kept explore/ branch would point at the base sha with
+    nothing to inspect.  A tree with nothing to commit is left as it is.
+    """
+    result = _git(["add", "-A"], tree)
+    if result.returncode != 0:
+        raise InfraError("cannot stage the round's changes: %s" % result.stdout.strip())
+    result = _git(
+        ["-c", "user.name=agent-loop", "-c", "user.email=agent-loop@localhost",
+         "commit", "-q", "-m", message],
+        tree,
+    )
+    if result.returncode != 0 and "nothing to commit" not in result.stdout:
+        raise InfraError("cannot commit the round's changes: %s" % result.stdout.strip())
+
+
 def remove(repo_root: Path, workspace: Workspace, worktree_root: Path) -> None:
     """Remove the worktree, its branch and the temp dir this round created.
 
