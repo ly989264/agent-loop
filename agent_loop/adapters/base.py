@@ -61,7 +61,12 @@ def bounded_run(
     budget: Budget,
     cwd: Path,
 ) -> Tuple[str, int, str]:
-    """Run ``argv`` under the budget.  Returns (status, returncode, raw_tail)."""
+    """Run ``argv`` under the budget.  Returns (status, returncode, raw_tail).
+
+    Output is read a chunk at a time from the raw descriptor, never with
+    ``readline``: a child that writes an unterminated line and then goes quiet
+    blocks a line read, and both caps would sleep through the whole silence.
+    """
     try:
         process = subprocess.Popen(
             list(argv),
@@ -69,7 +74,6 @@ def bounded_run(
             stdin=subprocess.PIPE,
             stdout=subprocess.PIPE,
             stderr=subprocess.STDOUT,
-            universal_newlines=True,
             env=agent_environment(),
             start_new_session=True,
         )
@@ -78,33 +82,44 @@ def bounded_run(
     started = time.monotonic()
     last_event = started
     lines: List[str] = []
+    pending = b""
 
-    def keep(line: str) -> None:
-        lines.append(line.rstrip()[:TAIL_LINE_BYTES])
+    def keep(text: str) -> None:
+        lines.append(text.rstrip()[:TAIL_LINE_BYTES])
         if len(lines) > TAIL_LINES:
             del lines[:-TAIL_LINES]
 
+    def tail() -> str:
+        return "\n".join(lines + ([pending.decode("utf-8", "replace")] if pending else []))
+
     selector = selectors.DefaultSelector()
     try:
-        process.stdin.write(stdin_text)
+        process.stdin.write(stdin_text.encode("utf-8"))
         process.stdin.close()
-        selector.register(process.stdout, selectors.EVENT_READ)
-        while process.poll() is None:
+        descriptor = process.stdout.fileno()
+        selector.register(descriptor, selectors.EVENT_READ)
+        while True:
             now = time.monotonic()
-            if now - started > budget.wall_s:
+            if now - started > budget.wall_s or now - last_event > budget.silence_s:
                 _terminate(process)
-                return "timeout", -1, "\n".join(lines)
-            if now - last_event > budget.silence_s:
+                return "timeout", -1, tail()
+            if not selector.select(timeout=0.5):
+                if process.poll() is not None:
+                    break
+                continue
+            chunk = os.read(descriptor, 65_536)
+            if not chunk:
+                break
+            last_event = time.monotonic()
+            pending += chunk
+            while b"\n" in pending:
+                line, _, pending = pending.partition(b"\n")
+                keep(line.decode("utf-8", "replace"))
+        while process.poll() is None:
+            if time.monotonic() - started > budget.wall_s:
                 _terminate(process)
-                return "timeout", -1, "\n".join(lines)
-            for key, _ in selector.select(timeout=1):
-                line = key.fileobj.readline()
-                if not line:
-                    continue
-                last_event = time.monotonic()
-                keep(line)
-        for line in process.stdout:
-            keep(line)
+                return "timeout", -1, tail()
+            time.sleep(0.05)
     except BaseException:
         _terminate(process)
         raise
@@ -113,7 +128,7 @@ def bounded_run(
         for stream in (process.stdin, process.stdout):
             if stream is not None and not stream.closed:
                 stream.close()
-    return "ok", process.returncode, "\n".join(lines)
+    return "ok", process.returncode, tail()
 
 
 def extract_json(text: str) -> Optional[Dict[str, Any]]:

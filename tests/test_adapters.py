@@ -1,4 +1,5 @@
 import json
+import time
 import unittest
 
 from agent_loop.adapters import REGISTRY, build, invoke_with_one_repair
@@ -86,6 +87,24 @@ class ShellAdapterTest(unittest.TestCase):
         result = adapter.run("worker", "b", WORKER_OUTPUT_SCHEMA, "read-only",
                              Budget(wall_s=2, silence_s=2, max_tokens=10))
         self.assertEqual(result.status, "timeout")
+
+    def test_an_agent_that_stops_mid_line_still_hits_the_silence_cap(self):
+        # A child that writes an unterminated line and goes quiet blocks a line
+        # read; with readline the caps slept through the whole silence.
+        script = write_script(self.root, "partial.py",
+                              "#!/usr/bin/env python3\n"
+                              "import sys, time\n"
+                              "sys.stdin.read()\n"
+                              "sys.stdout.write('partial')\n"
+                              "sys.stdout.flush()\n"
+                              "time.sleep(60)\n")
+        adapter = build(AgentSpec.parse("shell:%s" % script), cwd=self.root)
+        started = time.monotonic()
+        result = adapter.run("worker", "b", WORKER_OUTPUT_SCHEMA, "read-only",
+                             Budget(wall_s=20, silence_s=2, max_tokens=10))
+        self.assertEqual(result.status, "timeout")
+        self.assertLess(time.monotonic() - started, 15)
+        self.assertIn("partial", result.raw_tail)
 
     def test_an_unknown_sandbox_is_a_programming_error(self):
         with self.assertRaises(ValueError):
