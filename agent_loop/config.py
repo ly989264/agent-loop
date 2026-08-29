@@ -99,6 +99,10 @@ class Config:
             raise ConfigError("no caps configured for role %r" % role)
         return self.caps[role]
 
+    def level(self, cost_class: str) -> str:
+        """The autonomy level for this cost class; L1 unless the config says otherwise."""
+        return self.levels.get(cost_class, "L1")
+
     def verify_for(self, cost_class: str) -> VerifyCommand:
         if cost_class not in self.verify:
             raise ConfigError("no verify command configured for cost class %r" % cost_class)
@@ -212,8 +216,8 @@ def load(path: os.PathLike) -> Config:
     for cost_class, level in levels_document.items():
         if level not in {"L1", "L2", "L3"}:
             raise ConfigError("levels.%s must be L1, L2 or L3" % cost_class)
-        if level != "L1":
-            raise ConfigError("levels.%s is %s; only L1 is implemented" % (cost_class, level))
+        if level == "L3":
+            raise ConfigError("levels.%s is L3; only L1 and L2 are implemented" % cost_class)
 
     return Config(
         root=root,

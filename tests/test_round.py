@@ -305,6 +305,63 @@ class RoundTest(unittest.TestCase):
             len([call for call in gh_calls(self.root) if call["argv"][1] == "comment"]), 1)
         self.assertNotIn("create", [call["argv"][1] for call in gh_calls(self.root)][2:])
 
+    L2_GH = [{"match": ["list"], "out": "[]"},
+             {"match": ["create"], "out": "https://github.com/o/r/pull/7\n"},
+             {"match": ["view"], "out": '{"comments": []}'},
+             {"match": ["merge"], "out": "merged\n"}]
+
+    def l2_round(self, findings):
+        agent = REVIEWING_AGENT % (repr(json.dumps({"findings": findings})),
+                                   repr(json.dumps(ANSWER)))
+        config_path = self.build(
+            agent, config=REVIEWER_CONFIG.replace("hermetic: L1", "hermetic: L2"))
+        origin_for(self.root)
+        fake_gh(self.root, self.L2_GH)
+        outcome = self.run_once(config_path)
+        record = ledger.read(self.root / ".agent-loop" / "ledger.jsonl")[-1]
+        merges = [call for call in gh_calls(self.root) if call["argv"][1] == "merge"]
+        return outcome, record, merges
+
+    def test_l2_squash_merges_a_round_the_reviewer_had_nothing_holding_to_say_about(self):
+        outcome, record, merges = self.l2_round(
+            [{"kind": "suggestion", "location": "a:1", "claim": "c", "citation": ""}])
+        self.assertEqual(outcome.state, PR_READY)
+        self.assertEqual(record["decision"], "FYI")
+        self.assertEqual(record["pr_url"], "https://github.com/o/r/pull/7")
+        self.assertIn("merged", record["reason"])
+        self.assertEqual([call["argv"] for call in merges],
+                         [["pr", "merge", "https://github.com/o/r/pull/7", "--squash"]])
+        self.assertTrue(self.notifications()[0].startswith("FYI "))
+
+    def test_l2_leaves_a_defect_finding_open_and_asks_the_operator_in_one_line(self):
+        outcome, record, merges = self.l2_round(
+            [{"kind": "defect", "location": "a:1", "claim": "it drops the tail",
+              "citation": "the failing case"}])
+        self.assertEqual(outcome.state, PR_READY)
+        self.assertEqual(record["decision"], "DECIDE")
+        self.assertEqual(merges, [])  # the pull request stays open
+        line = self.notifications()[0]
+        self.assertEqual(len(self.notifications()), 1)
+        self.assertTrue(line.startswith("DECIDE "))
+        self.assertIn("https://github.com/o/r/pull/7", line)
+        self.assertIn("1 defect finding(s) - merge anyway?", line)
+
+    def test_an_unanswered_decide_blocks_the_next_round_on_that_item(self):
+        config_path = self.build(AGENT % repr(json.dumps(ANSWER)), config=CONFIG + "scm: github\n")
+        (self.root / ".agent-loop" / "ledger.jsonl").write_text(json.dumps({
+            "ts": "2020-01-01T00:00:00Z", "item": "an-item", "sha": "old", "state": PR_READY,
+            "pr_url": "https://github.com/o/r/pull/7", "decision": "DECIDE"}) + "\n",
+            encoding="utf-8")
+        origin_for(self.root)
+        fake_gh(self.root, [{"match": ["view"], "out": '{"state": "OPEN"}'}])
+        outcome = self.run_once(config_path)
+        self.assertEqual(outcome.state, BLOCKED)
+        self.assertIn("waiting on the operator", outcome.reason)
+        self.assertIn("pull/7", outcome.reason)
+        # no worker ran, so nothing was built and no branch exists
+        self.assertNotIn("explore/an-item", self.branches())
+        self.assertEqual([call["argv"][1] for call in gh_calls(self.root)], ["view"])
+
     def test_a_tool_version_change_is_a_warning_on_the_round_s_line(self):
         blocked = dict(ANSWER, status="blocked", diff_applied=False, reason="not mine to fix")
         config_path = self.build(BLOCKING_AGENT % repr(json.dumps(blocked)))

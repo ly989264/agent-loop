@@ -12,8 +12,16 @@ from typing import Optional, Sequence
 from .config import Config, NotifyTarget
 
 
-def line(item: Optional[str], state: str, sha: str, reason: str) -> str:
-    return "%-8s %-44s %s  %s" % (state, item or "-", sha[:12], reason)
+def line(
+    item: Optional[str], state: str, sha: str, reason: str, decision: Optional[str] = None
+) -> str:
+    """One operator-visible line; ``decision`` is FYI or DECIDE where there is one.
+
+    A round with nothing to decide - NO_ITEM, INFRA, a BLOCKED with no pull
+    request - carries no prefix, because there is no question in it.
+    """
+    text = "%-8s %-44s %s  %s" % (state, item or "-", sha[:12], reason)
+    return text if decision is None else "%-6s %s" % (decision, text)
 
 
 def _emit(target: NotifyTarget, root: Path, text: str) -> None:
@@ -49,9 +57,10 @@ def notify(
     state: str,
     sha: str,
     reason: str,
+    decision: Optional[str] = None,
     targets: Optional[Sequence[NotifyTarget]] = None,
 ) -> str:
-    text = line(item, state, sha, reason)
+    text = line(item, state, sha, reason, decision)
     for target in config.notify if targets is None else targets:
         _emit(target, config.root, text)
     return text

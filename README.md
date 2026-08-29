@@ -6,8 +6,8 @@ a throwaway worktree, verifies the result, writes one ledger line and sends one
 notification. The kernel is generic; every project-specific fact lives in the
 consumer's `.agent-loop/config.yaml` and `.agent-loop/backlog.yaml`.
 
-This is Stage 2a of the exploration-loop roadmap: mode `once`, no GitHub, no
-autonomy levels above L1, no Docker handling.
+This is Stage 3 of the exploration-loop roadmap: mode `once`, autonomy levels
+L1 and L2, no Docker handling.
 
 ## The round
 
@@ -25,11 +25,23 @@ autonomy levels above L1, no Docker handling.
               protected path is among the paths the round touched - committed,
               modified, added or untracked, against the sha it started from
                                                  any of the three fails -> BLOCKED
-5  ledger     one JSONL line: ts, item, sha, state, reason, cost, duration_s,
-              tool_versions (drift is a warning, never a gate)
-6  notify     one notification per (item, state, sha), to every configured target
-7  cleanup    the worktree, its explore/ branch and the round's temp dir, on
-              every exit path
+5  publish    push explore/<item-id>, open its pull request or update the one it
+              already has, with a body the kernel writes from this round's own
+              record; local-only opens nothing
+6  review     the reviewer agent reads the item, the diff and §0's finding
+              classes and answers findings; they become one pull-request
+              comment, and are not fed back to the worker
+7  merge      L1 leaves the pull request open; L2 squash-merges it when the
+              reviewer returned no contract or defect finding and nothing is
+              held.  A protected path, or a diff verify flagged, never merges
+              at any level: the round says DECIDE instead, and a DECIDE nobody
+              answered in 24 h makes the next round on that item BLOCKED
+8  ledger     one JSONL line: ts, item, sha, state, reason, cost, duration_s,
+              tool_versions (drift is a warning, never a gate), pr_url, decision
+9  notify     one notification per (item, state, sha), to every configured
+              target, prefixed FYI or DECIDE where the round has a question
+10 cleanup    the worktree, the round's temp dir, and the explore/ branch once
+              origin holds a copy of it - on every exit path
 ```
 
 Terminal states are exactly four: `PR_READY`, `BLOCKED`, `NO_ITEM`, `INFRA`.

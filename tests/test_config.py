@@ -46,10 +46,22 @@ class ConfigTest(unittest.TestCase):
             self.load(CONFIG.replace("branch: main", ""))
         self.assertIn("branch", str(caught.exception))
 
-    def test_only_l1_is_accepted(self):
+    def test_l1_and_l2_are_accepted_and_l3_is_not(self):
+        self.assertEqual(self.load(CONFIG).level("hermetic"), "L1")
+        self.assertEqual(
+            self.load(CONFIG.replace("hermetic: L1", "hermetic: L2")).level("hermetic"), "L2")
+        # a cost class the config says nothing about is L1, not "anything goes"
+        self.assertEqual(self.load(CONFIG).level("docker-exact-50"), "L1")
         with self.assertRaises(ConfigError) as caught:
-            self.load(CONFIG.replace("hermetic: L1", "hermetic: L2"))
-        self.assertIn("only L1", str(caught.exception))
+            self.load(CONFIG.replace("hermetic: L1", "hermetic: L3"))
+        self.assertIn("only L1 and L2", str(caught.exception))
+
+    def test_the_publisher_defaults_to_local_only_and_an_unknown_one_is_refused(self):
+        self.assertEqual(self.load(CONFIG).scm, "local-only")
+        self.assertEqual(self.load(CONFIG + "\nscm: github\n").scm, "github")
+        with self.assertRaises(ConfigError) as caught:
+            self.load(CONFIG + "\nscm: gitlab\n")
+        self.assertIn("scm must be one of", str(caught.exception))
 
     def test_a_file_notify_target_needs_a_path(self):
         with self.assertRaises(ConfigError):

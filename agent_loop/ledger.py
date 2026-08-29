@@ -21,6 +21,7 @@ FIELDS = (
     "tool_versions",
     "warning",
     "pr_url",
+    "decision",
 )
 
 

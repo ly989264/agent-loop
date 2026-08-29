@@ -45,6 +45,10 @@ def failing_lines(output: str, limit: int = FAILING_LINE_LIMIT) -> str:
 class VerifyOutcome:
     ok: bool
     reason: str
+    # What of the diff is protected. Empty on the path that reaches PR_READY,
+    # because a hit is BLOCKED here - and read again by the merge guard, so
+    # invariant 8 does not rest on this function alone.
+    protected: Tuple[str, ...] = ()
 
 
 def changed_paths(tree: Path, base_sha: str) -> Tuple[int, Sequence[str], str]:
@@ -106,5 +110,5 @@ def verify(config: Config, item: Item, tree: Path, base_sha: str) -> VerifyOutco
         return VerifyOutcome(False, "cannot read the round's diff: %s" % output[-800:])
     hits = touched_protected_paths(changed, config.protected_paths)
     if hits:
-        return VerifyOutcome(False, "diff touches protected paths: %s" % ", ".join(hits))
+        return VerifyOutcome(False, "diff touches protected paths: %s" % ", ".join(hits), hits)
     return VerifyOutcome(True, "probe passes, %s passes, no protected path touched" % command)
