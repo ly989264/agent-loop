@@ -223,6 +223,23 @@ class RoundTest(unittest.TestCase):
         self.assertIn("project/fixed.txt", shown)
         self.assertEqual(list((self.root / ".agent-loop" / "worktrees").iterdir()), [])
 
+    def test_a_tool_version_change_is_a_warning_on_the_round_s_line(self):
+        blocked = dict(ANSWER, status="blocked", diff_applied=False, reason="not mine to fix")
+        config_path = self.build(BLOCKING_AGENT % repr(json.dumps(blocked)))
+        self.run_once(config_path)
+        original = round_module.ledger.tool_versions
+        round_module.ledger.tool_versions = lambda adapters=(): {"git": "git version 99.0"}
+        try:
+            second = self.run_once(config_path)
+        finally:
+            round_module.ledger.tool_versions = original
+        self.assertEqual(second.state, NO_ITEM)  # the drift changes no state
+        records = ledger.read(self.root / ".agent-loop" / "ledger.jsonl")
+        self.assertIsNone(records[0]["warning"])
+        self.assertIn("git version", records[1]["warning"])
+        self.assertIn("-> git version 99.0", records[1]["warning"])
+        self.assertEqual(len(self.notifications()), 2)  # and notifies nothing extra
+
     def test_a_worker_that_blocks_is_blocked_then_skipped(self):
         blocked = dict(ANSWER, status="blocked", diff_applied=False,
                        reason="the design doc forbids it")

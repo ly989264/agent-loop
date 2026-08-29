@@ -153,6 +153,7 @@ def run_once(config_path: Path) -> Outcome:
             "cost": cost,
             "duration_s": round(duration, 3),
             "tool_versions": versions,
+            "warning": ledger.drift(records, versions),
         },
     )
     if notified:

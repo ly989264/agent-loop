@@ -53,6 +53,23 @@ class LedgerTest(unittest.TestCase):
         self.assertFalse(ledger.already_notified(records, "a", PR_READY, "one"))
         self.assertFalse(ledger.already_notified(records, "b", BLOCKED, "one"))
 
+    def test_tool_version_drift_is_a_warning_naming_what_changed(self):
+        first = {"git": "git version 2.50.1", "claude": "2.1.251"}
+        second = {"git": "git version 2.50.1", "claude": "2.2.0"}
+        records = [{"tool_versions": first}]
+        self.assertIsNone(ledger.drift([], second))
+        self.assertIsNone(ledger.drift(records, dict(first)))
+        warning = ledger.drift(records, second)
+        self.assertIn("claude 2.1.251 -> 2.2.0", warning)
+        self.assertNotIn("git", warning)
+        # a tool that appears or disappears is named too
+        self.assertIn("codex absent -> 1.0", ledger.drift(records, dict(first, codex="1.0")))
+
+    def test_drift_compares_against_the_last_round_that_recorded_versions(self):
+        records = [{"tool_versions": {"git": "old"}}, {"tool_versions": None}, {}]
+        self.assertIsNone(ledger.drift(records, {"git": "old"}))
+        self.assertIn("git old -> new", ledger.drift(records, {"git": "new"}))
+
     def test_a_round_with_no_item_dedups_on_the_empty_item(self):
         self.assertTrue(ledger.already_notified(
             [{"item": None, "sha": "one", "state": "NO_ITEM"}], None, "NO_ITEM", "one"))

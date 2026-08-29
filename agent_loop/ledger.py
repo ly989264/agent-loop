@@ -6,7 +6,7 @@ import datetime
 import json
 import subprocess
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Sequence, Set
+from typing import Any, Dict, List, Mapping, Optional, Sequence, Set
 
 from .states import BLOCKED
 
@@ -19,6 +19,7 @@ FIELDS = (
     "cost",
     "duration_s",
     "tool_versions",
+    "warning",
 )
 
 
@@ -76,6 +77,30 @@ def already_notified(
         if (str(record.get("item") or ""), record.get("state"), record.get("sha")) == key:
             return True
     return False
+
+
+def drift(records: Sequence[Dict[str, Any]], versions: Mapping[str, str]) -> Optional[str]:
+    """How this round's tools differ from the last recorded round's, or None.
+
+    A worker whose behaviour changes between two rounds is usually explained by
+    the tool under it changing, and that is invisible once the rounds are a week
+    apart.  It is a note on the round's own line and nothing more: no state, no
+    notification, no effect on the terminal state - an upgrade is not a failure.
+    """
+    previous = None
+    for record in reversed(list(records)):
+        recorded = record.get("tool_versions")
+        if isinstance(recorded, dict) and recorded:
+            previous = recorded
+            break
+    if previous is None or previous == dict(versions):
+        return None
+    changes = [
+        "%s %s -> %s" % (name, previous.get(name, "absent"), versions.get(name, "absent"))
+        for name in sorted(set(previous) | set(versions))
+        if previous.get(name) != versions.get(name)
+    ]
+    return "tool versions changed since the previous round: " + "; ".join(changes)
 
 
 def _version(argv: Sequence[str]) -> str:
