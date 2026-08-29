@@ -9,6 +9,7 @@ notification for it, deduplicated by (item, state, sha).
 
 from __future__ import annotations
 
+import signal
 import time
 from dataclasses import dataclass
 from pathlib import Path
@@ -49,6 +50,17 @@ class Result:
     review_posted: bool = False
     diff_stat: str = ""
     pr_state: Optional[str] = None
+
+
+def _round_wall_handler(seconds: int):
+    """caps.round_wall_s, enforced in-process: the alarm's InfraError takes the
+    same path any other one does - existing worktree cleanup (workspace()'s
+    finally), the existing except clause below, one ledger line, one
+    deduplicated notification. Nothing is bypassed because nothing new exists.
+    """
+    def _handler(signum, frame):
+        raise InfraError("round exceeded caps.round_wall_s (%ds)" % seconds)
+    return _handler
 
 
 def _retain(space: Workspace, item: backlog.Item) -> Optional[str]:
@@ -272,6 +284,8 @@ def run_once(config_path: Path) -> Outcome:
     review_posted: bool = False
     diff_stat: str = ""
     pr_state: Optional[str] = None
+    signal.signal(signal.SIGALRM, _round_wall_handler(config.round_wall_s))
+    signal.alarm(config.round_wall_s)
     try:
         sha = head_sha(config.root, config.branch)
         with lock.hold(config.root, config.worktree_root):
@@ -303,6 +317,8 @@ def run_once(config_path: Path) -> Outcome:
     except Exception as exc:  # noqa: BLE001 - a round always ends in a state
         records = ledger.read(config.ledger)
         state, reason = INFRA, "unexpected %s: %s" % (type(exc).__name__, exc)
+    finally:
+        signal.alarm(0)
 
     versions = ledger.tool_versions(
         sorted({spec.adapter for specs in config.agents.values() for spec in specs})

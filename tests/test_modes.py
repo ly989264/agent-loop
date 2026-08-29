@@ -88,10 +88,6 @@ open("project/fixed.txt", "w").write("fixed\\n")
 print(%s)
 """
 
-SLOW_VERIFY_CONFIG = CONFIG.replace('command: "true"', 'command: "sleep 5 && true"').replace(
-    "  idle_s: 1", "  idle_s: 1\n  round_wall_s: 1")
-
-
 class ModesTestBase(unittest.TestCase):
     def build(self, config=CONFIG, backlog=BACKLOG, agent_body=AGENT):
         self.root = make_repo(config="branch: main\n", backlog=backlog)
@@ -205,19 +201,9 @@ class WaitForTriggerTest(ModesTestBase):
         self.assertEqual(records[-1]["pr_state"], "MERGED")
 
 
-class BoundedRoundTest(ModesTestBase):
-    def test_a_round_over_its_wall_cap_is_killed_and_recorded_infra(self):
-        config_path = self.build(config=SLOW_VERIFY_CONFIG)
-        config = config_module.load(config_path)
-        self.assertEqual(config.round_wall_s, 1)
-        modes._bounded_round(config_path, config)
-        records = ledger.read(config.ledger)
-        self.assertEqual(len(records), 1)
-        self.assertEqual(records[0]["state"], INFRA)
-        self.assertIn("caps.round_wall_s", records[0]["reason"])
-        self.assertEqual(records[0]["duration_s"], 1.0)
-        notifications = (self.root / ".agent-loop" / "notifications.log").read_text().splitlines()
-        self.assertEqual(len(notifications), 1)
+# caps.round_wall_s is now enforced inside round.run_once itself
+# (signal.alarm) - see test_round.py's
+# test_a_round_over_its_wall_cap_ends_infra_in_process_and_cleans_up.
 
 
 class RunContinuousTest(ModesTestBase):

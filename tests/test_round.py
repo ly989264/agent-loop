@@ -415,6 +415,33 @@ class RoundTest(unittest.TestCase):
         self.assertIn("-> git version 99.0", records[1]["warning"])
         self.assertEqual(len(self.notifications()), 2)  # and notifies nothing extra
 
+    def test_a_round_over_its_wall_cap_ends_infra_in_process_and_cleans_up(self):
+        # caps.round_wall_s is a signal.alarm inside run_once itself (Stage 4b
+        # review round 1: no subprocess). Its InfraError takes the same path
+        # any other one does, so the worktree it started is removed by
+        # workspace()'s own finally - nothing is left for the next round.
+        slow_config = CONFIG.replace(
+            'command: "true"', 'command: "sleep 5 && true"'
+        ).replace(
+            "caps:\n  worker:", "caps:\n  round_wall_s: 1\n  worker:"
+        )
+        config_path = self.build(AGENT % repr(json.dumps(ANSWER)), config=slow_config)
+        outcome = self.run_once(config_path)
+        self.assertEqual(outcome.state, INFRA)
+        self.assertIn("caps.round_wall_s", outcome.reason)
+        self.assertNotIn("explore/an-item", self.branches())
+        self.assertEqual(list((self.root / ".agent-loop" / "worktrees").iterdir()), [])
+        record = ledger.read(self.root / ".agent-loop" / "ledger.jsonl")[-1]
+        self.assertEqual(record["state"], INFRA)
+        self.assertEqual(len(self.notifications()), 1)
+
+        # the item is picked again next round rather than stuck INFRA forever
+        written = config_path.read_text()
+        config_path.write_text(
+            written.replace("sleep 5 && true", "true"), encoding="utf-8")
+        second = self.run_once(config_path)
+        self.assertEqual(second.state, PR_READY)
+
     def test_a_worker_that_blocks_is_blocked_then_skipped(self):
         blocked = dict(ANSWER, status="blocked", diff_applied=False,
                        reason="the design doc forbids it")

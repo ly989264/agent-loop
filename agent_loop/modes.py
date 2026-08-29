@@ -1,11 +1,13 @@
 """Modes other than ``once``: ``continuous``, ``schedule``, ``until``.
 
 ``once`` (``round.run_once``) is a single round and is unchanged. Every other
-mode is a driver around that same round, invoked as a subprocess each time -
-no daemon, and it is what makes ``caps.round_wall_s`` a real ceiling rather
-than a number nothing reads: a round killed on the cap leaves its lock file
-with a dead pid, which ``lock.hold`` already takes over next time, the same
-as any other killed round.
+mode drives it in-process, round after round - no subprocess, no daemon.
+``caps.round_wall_s`` is enforced inside ``run_once`` itself (a
+``signal.alarm``, round.py), so a round that runs long ends the same way any
+other INFRA does: existing worktree cleanup, one ledger line, one
+deduplicated notification. This module never spawns a process for a round and
+never notifies a round's own outcome - only ``notify.py`` does that, and only
+once per (item, state, sha).
 
 ``schedule`` needs nothing ``once`` does not already do - one round, exit
 code says which of the four states - so it is that mode under cron's name,
@@ -17,22 +19,16 @@ between checks and nothing here is a background process.
 
 from __future__ import annotations
 
-import os
-import signal
 import statistics
-import subprocess
-import sys
 import time
 from collections import Counter
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Dict, Optional, Tuple
+from typing import Dict, Optional
 
-from . import config as config_module, ledger, notify, scm
+from . import config as config_module, ledger, notify, round as round_module, scm
 from .config import Config
-from .errors import InfraError
 from .states import BLOCKED, INFRA, NO_ITEM, PR_READY
-from .worktree import head_sha
 
 PAUSE_NAME = ".paused"
 NON_PROGRESS_STATES = (NO_ITEM, INFRA)
@@ -68,49 +64,6 @@ def _backlog_mtime(path: Path) -> float:
         return path.stat().st_mtime
     except OSError:
         return 0.0
-
-
-def _bounded_round(config_path: Path, config: Config) -> None:
-    """Run one round as a subprocess of ``agent-loop run --mode once``.
-
-    A round that is still going at ``round_wall_s`` is killed outright - its
-    own process group, so a grandchild it started (the worker, a verify
-    command) goes with it - and nothing here waits for its cleanup to run: a
-    killed round's ledger line is written here instead, since the round
-    itself never got to.
-    """
-    argv = [sys.executable, "-m", "agent_loop.cli",
-            "run", "--config", str(config_path), "--mode", "once"]
-    process = subprocess.Popen(argv, start_new_session=True)
-    try:
-        process.wait(timeout=config.round_wall_s)
-        return
-    except subprocess.TimeoutExpired:
-        pass
-    try:
-        os.killpg(process.pid, signal.SIGKILL)
-    except (ProcessLookupError, PermissionError):
-        pass
-    process.wait()
-    try:
-        sha = head_sha(config.root, config.branch)
-    except InfraError:
-        sha = ""
-    reason = "round exceeded caps.round_wall_s (%ds); killed" % config.round_wall_s
-    ledger.append(config.ledger, {
-        "ts": ledger.now(), "item": None, "sha": sha, "state": INFRA, "reason": reason,
-        "duration_s": float(config.round_wall_s),
-    })
-    notify.notify(config, item=None, state=INFRA, sha=sha, reason=reason)
-
-
-def _round_result(config: Config) -> Tuple[str, Optional[float], bool]:
-    records = ledger.read(config.ledger)
-    if not records:
-        return INFRA, None, False
-    last = records[-1]
-    state = last.get("state") or INFRA
-    return state, last.get("cost"), state == PR_READY and bool(last.get("pr_url"))
 
 
 def _stop_met(stop: Stop, started: float, prs_opened: int, cost_spent: float) -> bool:
@@ -181,14 +134,13 @@ def run_continuous(config_path: Path, stop: Optional[Stop] = None) -> int:
         if paused(config.worktree_root):
             continue
 
-        _bounded_round(config_path, config)
-        state, cost, opened = _round_result(config)
-        prs_opened += 1 if opened else 0
-        cost_spent += cost or 0.0
+        outcome = round_module.run_once(config_path)
+        prs_opened += 1 if outcome.state == PR_READY and outcome.pr_url else 0
+        cost_spent += outcome.cost or 0.0
         if stop is not None and _stop_met(stop, started, prs_opened, cost_spent):
             return 0
 
-        non_progress = _after_round(config, state, non_progress)
+        non_progress = _after_round(config, outcome.state, non_progress)
 
         reason = _wait_for_trigger(config, publisher, last_backlog_mtime)
         print("agent-loop: continuous - %s" % reason)
