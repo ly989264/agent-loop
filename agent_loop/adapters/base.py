@@ -13,7 +13,9 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import selectors
+import shlex
 import signal
 import subprocess
 import time
@@ -156,14 +158,52 @@ def extract_json(text: str) -> Optional[Dict[str, Any]]:
     return parsed if isinstance(parsed, dict) else None
 
 
+_ENV_ASSIGNMENT = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*=")
+FILE_TOOLS = ("Read", "Edit", "Write")
+
+
+def allowed_tools(commands: Sequence[Optional[str]]) -> List[str]:
+    """The tools a worker needs, derived from the commands the round will run.
+
+    Each command contributes ``Bash(<program>:*)`` for the program it starts
+    with - leading ``NAME=value`` assignments included, so a probe written
+    ``PYTHONPATH=src python3 ...`` yields ``Bash(PYTHONPATH=src python3:*)``.
+    Nothing is hardcoded: a consumer's commands are the only source, which is
+    what keeps a project's names out of the kernel.  Read/Edit/Write follow.
+    """
+    programs: List[str] = []
+    for command in commands:
+        first_line = next((line for line in (command or "").splitlines() if line.strip()), "")
+        try:
+            tokens = shlex.split(first_line, comments=True)
+        except ValueError:
+            tokens = first_line.split()
+        program: List[str] = []
+        for token in tokens:
+            program.append(token)
+            if not _ENV_ASSIGNMENT.match(token):
+                break
+        if program and not _ENV_ASSIGNMENT.match(program[-1]):
+            joined = " ".join(program)
+            if joined not in programs:
+                programs.append(joined)
+    return ["Bash(%s:*)" % program for program in programs] + list(FILE_TOOLS)
+
+
 class Adapter:
     """Base class; ``name`` is what the config's agent string selects."""
 
     name = ""
 
-    def __init__(self, model: Optional[str] = None, cwd: Optional[Path] = None) -> None:
+    def __init__(
+        self,
+        model: Optional[str] = None,
+        cwd: Optional[Path] = None,
+        allowed_tools: Sequence[str] = (),
+    ) -> None:
         self.model = model
         self.cwd = Path(cwd) if cwd is not None else Path.cwd()
+        self.allowed_tools = list(allowed_tools)
 
     def run(
         self,

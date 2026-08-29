@@ -32,6 +32,10 @@ class ClaudeCodeAdapter(Adapter):
         if self.model:
             argv += ["--model", self.model]
         argv += ["--permission-mode", "plan" if sandbox == "read-only" else "acceptEdits"]
+        if sandbox == "worktree-write" and self.allowed_tools:
+            # acceptEdits grants edits and denies every Bash command in -p mode,
+            # so the commands the round itself will run are named here.
+            argv += ["--allowedTools", ",".join(self.allowed_tools)]
         prompt = "%s\n\n%s\n" % (bundle, schema_instruction(schema))
         status, returncode, tail = bounded_run(argv, stdin_text=prompt, budget=budget, cwd=self.cwd)
         if status == "timeout":

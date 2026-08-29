@@ -15,7 +15,7 @@ from pathlib import Path
 from typing import Any, Dict, Optional, Tuple
 
 from . import backlog, config as config_module, context, ledger, notify, pick, verify
-from .adapters import build, invoke_with_one_repair
+from .adapters import allowed_tools, build, invoke_with_one_repair
 from .config import Config
 from .context import ContextTooLarge
 from .errors import ConfigError, InfraError
@@ -49,7 +49,11 @@ def _worker_round(config: Config, selection: pick.Selection, sha: str) -> Tuple[
             encoded = context.encode(bundle)
         except ContextTooLarge as exc:
             return BLOCKED, str(exc), None
-        adapter = build(config.ladder("worker")[0], cwd=space.tree)
+        adapter = build(
+            config.ladder("worker")[0],
+            cwd=space.tree,
+            allowed_tools=allowed_tools([config.verify_for(item.cost_class).command, item.probe]),
+        )
         result = invoke_with_one_repair(
             adapter,
             role="worker",

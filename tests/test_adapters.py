@@ -3,7 +3,7 @@ import os
 import time
 import unittest
 
-from agent_loop.adapters import REGISTRY, build, invoke_with_one_repair
+from agent_loop.adapters import REGISTRY, allowed_tools, build, invoke_with_one_repair
 from agent_loop.config import AgentSpec, Budget
 from agent_loop.errors import ConfigError
 from agent_loop.schemas import WORKER_OUTPUT_SCHEMA
@@ -56,6 +56,7 @@ FAKE_CLAUDE = """\
 import json, sys
 sys.stdin.read()
 assert "stream-json" in sys.argv, sys.argv
+open("claude_argv.json", "w").write(json.dumps(sys.argv[1:]))
 print(json.dumps({"type": "system", "subtype": "init"}))
 print(json.dumps({"type": "assistant", "message": {"content": [{"type": "text", "text": "working"}]}}))
 print(json.dumps({"type": "result", "subtype": "success", "is_error": False,
@@ -83,6 +84,26 @@ class ClaudeCodeAdapterTest(unittest.TestCase):
         self.assertEqual(result.json, ANSWER)
         self.assertEqual(result.cost, 0.5)
         self.assertIn('"type": "system"', result.raw_tail)
+
+    def test_the_allowed_tools_are_derived_from_the_round_commands(self):
+        tools = allowed_tools(["./gate suite product.unit",
+                               "PYTHONPATH=src python3 - <<'EOF'\nimport x\nEOF\n",
+                               "./gate test one"])
+        self.assertEqual(tools, ["Bash(./gate:*)", "Bash(PYTHONPATH=src python3:*)",
+                                 "Read", "Edit", "Write"])
+        self.assertEqual(allowed_tools([None, ""]), ["Read", "Edit", "Write"])
+
+        (self.root / "bin").mkdir()
+        write_script(self.root, "bin/claude", FAKE_CLAUDE % repr(json.dumps(ANSWER)))
+        os.environ["PATH"] = "%s:%s" % (self.root / "bin", self.path)
+        adapter = build(AgentSpec.parse("claude-code:sonnet"), cwd=self.root, allowed_tools=tools)
+        result = adapter.run("worker", "bundle", WORKER_OUTPUT_SCHEMA, "worktree-write", self.budget)
+        self.assertEqual(result.status, "ok", result.raw_tail)
+        self.assertEqual(
+            json.loads((self.root / "claude_argv.json").read_text()),
+            ["-p", "--output-format", "stream-json", "--verbose", "--model", "sonnet",
+             "--permission-mode", "acceptEdits",
+             "--allowedTools", "Bash(./gate:*),Bash(PYTHONPATH=src python3:*),Read,Edit,Write"])
 
 
 class ShellAdapterTest(unittest.TestCase):
