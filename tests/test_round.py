@@ -78,11 +78,11 @@ print(%s)
 
 
 class RoundTest(unittest.TestCase):
-    def build(self, agent_body):
+    def build(self, agent_body, config=CONFIG):
         self.root = make_repo(config="branch: main\n", backlog=BACKLOG)
         script = write_script(self.root, "agent.py", agent_body)
         (self.root / ".agent-loop" / "config.yaml").write_text(
-            CONFIG % script, encoding="utf-8")
+            config % script, encoding="utf-8")
         git_init(self.root)
         return self.root / ".agent-loop" / "config.yaml"
 
@@ -187,6 +187,27 @@ class RoundTest(unittest.TestCase):
         self.assertEqual([record["state"] for record in records], [INFRA])
         self.assertEqual(list((self.root / ".agent-loop" / "worktrees").iterdir()), [])
 
+    def branches(self):
+        return subprocess.run(["git", "branch", "--format=%(refname:short)"],
+                              cwd=str(self.root), stdout=subprocess.PIPE,
+                              universal_newlines=True).stdout.split()
+
+    def test_a_blocked_verify_keeps_the_branch_so_the_diff_can_be_read(self):
+        # The worker answered `done` and the cost-class command said no: the
+        # diff is what has to be judged, so it survives the round.
+        config_path = self.build(AGENT % repr(json.dumps(ANSWER)),
+                                 config=CONFIG.replace('command: "true"', 'command: "false"'))
+        outcome = self.run_once(config_path)
+        self.assertEqual(outcome.state, BLOCKED)
+        self.assertIn("verify command", outcome.reason)
+        self.assertIn("explore/an-item", self.branches())
+        shown = subprocess.run(["git", "show", "--stat", "--format=%s", "explore/an-item"],
+                               cwd=str(self.root), stdout=subprocess.PIPE,
+                               universal_newlines=True).stdout
+        self.assertIn("agent-loop: an-item", shown)
+        self.assertIn("project/fixed.txt", shown)
+        self.assertEqual(list((self.root / ".agent-loop" / "worktrees").iterdir()), [])
+
     def test_a_worker_that_blocks_is_blocked_then_skipped(self):
         blocked = dict(ANSWER, status="blocked", diff_applied=False,
                        reason="the design doc forbids it")
@@ -194,6 +215,8 @@ class RoundTest(unittest.TestCase):
         first = self.run_once(config_path)
         self.assertEqual(first.state, BLOCKED)
         self.assertIn("the design doc forbids it", first.reason)
+        # nothing was applied, so there is no diff to keep and the branch goes
+        self.assertNotIn("explore/an-item", self.branches())
 
         second = self.run_once(config_path)
         self.assertEqual(second.state, NO_ITEM)

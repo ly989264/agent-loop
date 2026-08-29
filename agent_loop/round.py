@@ -86,6 +86,14 @@ def _worker_round(config: Config, selection: pick.Selection, sha: str) -> Tuple[
             return BLOCKED, "worker blocked: %s" % payload.get("reason", ""), result.cost
         outcome = verify.verify(config, item, space.tree, sha)
         if not outcome.ok:
+            # A BLOCKED that comes from verify has a diff worth reading: the
+            # worker answered `done` and something the kernel checked said no.
+            # It is retained exactly as PR_READY is, so the failing check can be
+            # judged against the change that met it.  A worker that answers
+            # `blocked` returned above, with nothing to keep.
+            failure = _retain(space, item)
+            if failure:
+                return INFRA, "%s; %s" % (outcome.reason, failure), result.cost
             return BLOCKED, outcome.reason, result.cost
         evidence = payload.get("mutation_evidence") or {}
         reason = "%s; test %s; reverted %r observed %r" % (
