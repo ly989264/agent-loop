@@ -11,9 +11,9 @@ import shutil
 import subprocess
 import tempfile
 from contextlib import contextmanager
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from pathlib import Path
-from typing import Iterator, Sequence
+from typing import Iterator, Optional, Sequence
 
 from .errors import InfraError
 
@@ -24,7 +24,7 @@ EXPLORE_PREFIX = "explore/"
 @dataclass(frozen=True)
 class Workspace:
     tree: Path
-    temp_dir: Path
+    temp_dir: Optional[Path] = None
     branch: str = ""
 
 
@@ -65,6 +65,8 @@ def remove(repo_root: Path, workspace: Workspace, worktree_root: Path) -> None:
         _git(["worktree", "prune"], repo_root)
         if workspace.branch.startswith(EXPLORE_PREFIX):
             _git(["branch", "-D", workspace.branch], repo_root)
+    if workspace.temp_dir is None:
+        return
     temp_dir = workspace.temp_dir.resolve()
     if temp_dir.exists() and temp_dir != Path(tempfile.gettempdir()).resolve():
         shutil.rmtree(temp_dir, ignore_errors=True)
@@ -77,17 +79,21 @@ def workspace(repo_root: Path, branch: str, worktree_root: Path, item_id: str) -
     if tree.exists():
         raise InfraError("worktree %s already exists; a previous round did not clean up" % tree)
     explore_branch = EXPLORE_PREFIX + item_id
-    result = _git(
-        ["worktree", "add", "-b", explore_branch, str(tree), branch], repo_root, timeout=600
-    )
-    if result.returncode != 0:
-        raise InfraError("cannot create worktree for %s: %s" % (item_id, result.stdout.strip()))
-    created = Workspace(
-        tree=tree,
-        temp_dir=Path(tempfile.mkdtemp(prefix="agent-loop-")),
-        branch=explore_branch,
-    )
+    # Everything this round creates is created inside the try, so a failure
+    # between two of them still leaves nothing behind. Creating the worktree
+    # first and entering the try afterwards left it for every later round to
+    # trip over.
+    created = Workspace(tree=tree)
     try:
+        result = _git(
+            ["worktree", "add", "-b", explore_branch, str(tree), branch], repo_root, timeout=600
+        )
+        if result.returncode != 0:
+            raise InfraError(
+                "cannot create worktree for %s: %s" % (item_id, result.stdout.strip())
+            )
+        created = Workspace(tree=tree, branch=explore_branch)
+        created = replace(created, temp_dir=Path(tempfile.mkdtemp(prefix="agent-loop-")))
         yield created
     finally:
         remove(repo_root, created, worktree_root)

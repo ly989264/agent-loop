@@ -8,7 +8,7 @@ from agent_loop import config as config_module
 from agent_loop.backlog import Item
 from agent_loop.verify import verify
 
-from support import CONFIG, cleanup, git_init, make_repo
+from support import cleanup, git_init, make_repo
 
 
 def item(probe="true"):

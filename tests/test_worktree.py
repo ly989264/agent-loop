@@ -2,6 +2,7 @@ import subprocess
 import unittest
 
 from agent_loop.errors import InfraError
+from agent_loop import worktree as worktree_module
 from agent_loop.worktree import Workspace, head_sha, remove, workspace
 
 from support import cleanup, git_init, make_repo
@@ -56,6 +57,25 @@ class WorktreeTest(unittest.TestCase):
         with self.assertRaises(InfraError):
             with workspace(self.root, "main", self.worktree_root, "an-item"):
                 pass
+
+    def test_a_failure_after_the_worktree_leaves_nothing_behind(self):
+        original = worktree_module.tempfile.mkdtemp
+
+        def explode(*args, **kwargs):
+            raise OSError("no space for the round's temp dir")
+
+        worktree_module.tempfile.mkdtemp = explode
+        try:
+            with self.assertRaises(OSError):
+                with workspace(self.root, "main", self.worktree_root, "an-item"):
+                    self.fail("the body must not run")
+        finally:
+            worktree_module.tempfile.mkdtemp = original
+        self.assertEqual(list(self.worktree_root.iterdir()), [])
+        self.assertNotIn("explore/an-item", self.branches())
+        # and the next round is not INFRA on a leftover
+        with workspace(self.root, "main", self.worktree_root, "an-item") as space:
+            self.assertTrue(space.tree.exists())
 
     def test_cleanup_refuses_a_path_outside_the_worktree_root(self):
         outside = self.root / "project"
