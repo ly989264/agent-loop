@@ -29,6 +29,9 @@ class Workspace:
     # Set by the round once it has something worth inspecting: the worktree
     # and temp dir still go, the explore/ branch stays.
     keep_branch: bool = False
+    # Set when the diff could not be committed onto the branch, so the tree is
+    # the only copy of it: nothing about the worktree is removed.
+    keep_tree: bool = False
 
 
 def _git(argv: Sequence[str], cwd: Path, timeout: int = 120) -> subprocess.CompletedProcess:
@@ -77,11 +80,13 @@ def remove(repo_root: Path, workspace: Workspace, worktree_root: Path) -> None:
     Nothing else: a path outside the configured worktree root and a branch
     outside the explore/ prefix are this round's to touch only if it made them.
     A workspace marked ``keep_branch`` keeps its explore/ branch, so a
-    PR_READY result leaves a diff to inspect after the worktree is gone.
+    PR_READY result leaves a diff to inspect after the worktree is gone.  One
+    marked ``keep_tree`` keeps the worktree as well, because an uncommittable
+    diff exists nowhere else.
     """
     root = worktree_root.resolve()
     tree = workspace.tree.resolve()
-    if tree != root and root in tree.parents:
+    if tree != root and root in tree.parents and not workspace.keep_tree:
         if tree.exists():
             _git(["worktree", "remove", "--force", str(tree)], repo_root)
         if tree.exists():

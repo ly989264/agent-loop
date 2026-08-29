@@ -3,6 +3,7 @@ the ledger line, and the notification deduplicated by (item, state, sha).
 """
 
 import contextlib
+import dataclasses
 import io
 import json
 import subprocess
@@ -137,6 +138,35 @@ class RoundTest(unittest.TestCase):
         again = self.run_once(config_path)
         self.assertEqual(again.state, INFRA)
         self.assertIn("explore/an-item", again.reason)
+
+    def test_a_commit_that_fails_is_infra_with_the_cost_and_keeps_the_diff(self):
+        # A repository hook (or commit.gpgsign) can refuse the commit that puts
+        # the round's diff on explore/<item>.  The round must not then delete
+        # the branch and worktree that hold the only copy of that diff, and the
+        # worker's cost is spent whether or not the commit succeeded.
+        config_path = self.build(AGENT % repr(json.dumps(ANSWER)))
+        hook = self.root / ".git" / "hooks" / "pre-commit"
+        hook.parent.mkdir(parents=True, exist_ok=True)
+        hook.write_text("#!/bin/sh\necho 'hook says no'\nexit 1\n", encoding="utf-8")
+        hook.chmod(0o755)
+        original = round_module.invoke_with_one_repair
+        round_module.invoke_with_one_repair = lambda *a, **k: dataclasses.replace(
+            original(*a, **k), cost=1.5)
+        try:
+            outcome = self.run_once(config_path)
+        finally:
+            round_module.invoke_with_one_repair = original
+        self.assertEqual(outcome.state, INFRA)
+        self.assertEqual(outcome.cost, 1.5)
+        self.assertIn("hook says no", outcome.reason)
+        record = ledger.read(self.root / ".agent-loop" / "ledger.jsonl")[-1]
+        self.assertEqual((record["state"], record["cost"]), (INFRA, 1.5))
+        branches = subprocess.run(["git", "branch", "--format=%(refname:short)"],
+                                  cwd=str(self.root), stdout=subprocess.PIPE,
+                                  universal_newlines=True).stdout.split()
+        self.assertIn("explore/an-item", branches)
+        tree = self.root / ".agent-loop" / "worktrees" / "an-item"
+        self.assertTrue((tree / "project" / "fixed.txt").exists())
 
     def test_an_unexpected_failure_still_ends_in_a_state_with_a_line(self):
         config_path = self.build(AGENT % repr(json.dumps(ANSWER)))

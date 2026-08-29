@@ -21,7 +21,7 @@ from .context import ContextTooLarge
 from .errors import ConfigError, InfraError
 from .schemas import WORKER_OUTPUT_SCHEMA
 from .states import BLOCKED, INFRA, NO_ITEM, PR_READY
-from .worktree import commit_all, head_sha, workspace
+from .worktree import Workspace, commit_all, head_sha, workspace
 
 
 @dataclass(frozen=True)
@@ -32,6 +32,23 @@ class Outcome:
     cost: Optional[float]
     duration_s: float
     notified: bool
+
+
+def _retain(space: Workspace, item: backlog.Item) -> Optional[str]:
+    """Keep the round's diff where it can be inspected, or say why it could not.
+
+    The diff is committed onto ``explore/<item>`` and the branch is kept.  A
+    ``git commit`` can still fail - a repository hook, ``commit.gpgsign`` - and
+    then the worktree holds the only copy, so it is kept too and the round ends
+    INFRA rather than deleting the evidence it exists to keep.
+    """
+    space.keep_branch = True
+    try:
+        commit_all(space.tree, "agent-loop: %s" % item.id)
+    except InfraError as exc:
+        space.keep_tree = True
+        return "%s; worktree kept at %s" % (exc, space.tree)
+    return None
 
 
 def _worker_round(config: Config, selection: pick.Selection, sha: str) -> Tuple[str, str, Optional[float]]:
@@ -77,8 +94,9 @@ def _worker_round(config: Config, selection: pick.Selection, sha: str) -> Tuple[
             evidence.get("reverted_command"),
             evidence.get("observed_failure_line"),
         )
-        commit_all(space.tree, "agent-loop: %s" % item.id)
-        space.keep_branch = True
+        failure = _retain(space, item)
+        if failure:
+            return INFRA, failure, result.cost
         return PR_READY, reason, result.cost
 
 
