@@ -8,7 +8,7 @@ import json
 import unittest
 
 from agent_loop import ledger, round as round_module
-from agent_loop.states import BLOCKED, NO_ITEM, PR_READY
+from agent_loop.states import BLOCKED, INFRA, NO_ITEM, PR_READY
 
 from support import cleanup, git_init, make_repo, write_script
 
@@ -117,6 +117,25 @@ class RoundTest(unittest.TestCase):
     def test_the_worktree_is_gone_after_the_round(self):
         config_path = self.build(AGENT % repr(json.dumps(ANSWER)))
         self.run_once(config_path)
+        self.assertEqual(list((self.root / ".agent-loop" / "worktrees").iterdir()), [])
+
+    def test_an_unexpected_failure_still_ends_in_a_state_with_a_line(self):
+        config_path = self.build(AGENT % repr(json.dumps(ANSWER)))
+        original = round_module.build
+
+        def explode(*args, **kwargs):
+            raise RuntimeError("something nobody predicted")
+
+        round_module.build = explode
+        try:
+            outcome = self.run_once(config_path)
+        finally:
+            round_module.build = original
+        self.assertEqual(outcome.state, INFRA)
+        self.assertIn("something nobody predicted", outcome.reason)
+        self.assertEqual(len(self.notifications()), 1)
+        records = ledger.read(self.root / ".agent-loop" / "ledger.jsonl")
+        self.assertEqual([record["state"] for record in records], [INFRA])
         self.assertEqual(list((self.root / ".agent-loop" / "worktrees").iterdir()), [])
 
     def test_a_worker_that_blocks_is_blocked_then_skipped(self):

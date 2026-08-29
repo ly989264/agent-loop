@@ -106,6 +106,14 @@ class ShellAdapterTest(unittest.TestCase):
         self.assertLess(time.monotonic() - started, 15)
         self.assertIn("partial", result.raw_tail)
 
+    def test_an_agent_that_never_reads_its_bundle_is_refused(self):
+        # /usr/bin/true exits at once; a 4 MB bundle then breaks the pipe, which
+        # used to raise BrokenPipeError out of the round.
+        adapter = build(AgentSpec.parse("shell:/usr/bin/true"), cwd=self.root)
+        result = adapter.run("worker", "x" * 4_000_000, WORKER_OUTPUT_SCHEMA,
+                             "worktree-write", self.budget)
+        self.assertEqual(result.status, "refused")
+
     def test_an_unknown_sandbox_is_a_programming_error(self):
         with self.assertRaises(ValueError):
             self.adapter().run("worker", "b", WORKER_OUTPUT_SCHEMA, "anything", self.budget)

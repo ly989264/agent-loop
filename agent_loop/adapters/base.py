@@ -43,6 +43,7 @@ def _terminate(process: "subprocess.Popen") -> None:
     try:
         os.killpg(process.pid, signal.SIGTERM)
     except (ProcessLookupError, PermissionError):
+        process.poll()  # reap a child that has already exited
         return
     try:
         process.wait(timeout=5)
@@ -94,8 +95,14 @@ def bounded_run(
 
     selector = selectors.DefaultSelector()
     try:
-        process.stdin.write(stdin_text.encode("utf-8"))
-        process.stdin.close()
+        try:
+            process.stdin.write(stdin_text.encode("utf-8"))
+            process.stdin.close()
+        except OSError as exc:
+            # An agent binary that exits before reading its bundle breaks the
+            # pipe; that is a refusal to answer, not a crash of the round.
+            _terminate(process)
+            return "refused", -1, "%s did not read its bundle: %s" % (argv[0], exc)
         descriptor = process.stdout.fileno()
         selector.register(descriptor, selectors.EVENT_READ)
         while True:

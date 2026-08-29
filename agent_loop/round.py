@@ -100,6 +100,9 @@ def run_once(config_path: Path) -> Outcome:
     except (ConfigError, InfraError) as exc:
         records = ledger.read(config.ledger)
         state, reason = INFRA, str(exc)
+    except Exception as exc:  # noqa: BLE001 - a round always ends in a state
+        records = ledger.read(config.ledger)
+        state, reason = INFRA, "unexpected %s: %s" % (type(exc).__name__, exc)
 
     versions = ledger.tool_versions(
         sorted({spec.adapter for specs in config.agents.values() for spec in specs})
