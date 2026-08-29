@@ -20,6 +20,7 @@ FIELDS = (
     "duration_s",
     "tool_versions",
     "warning",
+    "pr_url",
 )
 
 

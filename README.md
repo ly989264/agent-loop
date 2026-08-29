@@ -65,7 +65,8 @@ rather than ignored.
 | `agents` | per role (`planner`/`worker`/`reviewer`/`diagnoser`): `adapter[:model]`, a list being an escalation ladder |
 | `caps` | per role: `wall_s`, `silence_s`, `max_tokens` |
 | `notify` | `stdout`, `macos`, or `{target: file, path: ...}` |
-| `levels` | per cost class; only `L1` is implemented |
+| `levels` | per cost class; `L1` (a person merges) or `L2` (the loop may merge) |
+| `scm` | `github` (push, open or update the PR, one review comment, squash-merge) or `local-only` (the default: no forge) |
 
 A cost class with no `verify` entry cannot be verified, so a round that picks an
 item of that class ends `INFRA` rather than guessing.

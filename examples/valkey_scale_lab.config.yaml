@@ -46,7 +46,14 @@ notify:
     path: .agent-loop/notifications.log
   - macos
 
-# Only L1 is implemented; L2/L3 are Stage 3 and Stage 4.
+# On PR_READY the round pushes explore/<item> and opens (or updates) its pull
+# request before anything is cleaned up. `local-only` is the default and opens
+# nothing.
+scm: github
+
+# L1: the loop opens the pull request and a person merges it. L2 lets the loop
+# squash-merge when the reviewer found nothing that sends work back. L3 is not
+# implemented.
 levels:
   hermetic: L1
   docker-exact-50: L1

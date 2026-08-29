@@ -12,9 +12,9 @@ from __future__ import annotations
 import time
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Dict, Optional, Tuple
+from typing import Any, Dict, Mapping, Optional, Tuple
 
-from . import backlog, config as config_module, context, ledger, lock, notify, pick, verify
+from . import backlog, config as config_module, context, ledger, lock, notify, pick, scm, verify
 from .adapters import allowed_tools, build, invoke_with_one_repair
 from .config import Config
 from .context import ContextTooLarge
@@ -32,6 +32,17 @@ class Outcome:
     cost: Optional[float]
     duration_s: float
     notified: bool
+    pr_url: Optional[str] = None
+
+
+@dataclass(frozen=True)
+class Result:
+    """What the worker part of a round produced, before it is written down."""
+
+    state: str
+    reason: str
+    cost: Optional[float] = None
+    pr_url: Optional[str] = None
 
 
 def _retain(space: Workspace, item: backlog.Item) -> Optional[str]:
@@ -51,7 +62,49 @@ def _retain(space: Workspace, item: backlog.Item) -> Optional[str]:
     return None
 
 
-def _worker_round(config: Config, selection: pick.Selection, sha: str) -> Tuple[str, str, Optional[float]]:
+def _publish(
+    config: Config,
+    space: Workspace,
+    item: backlog.Item,
+    sha: str,
+    reason: str,
+    payload: Mapping[str, Any],
+    cost: Optional[float],
+) -> Tuple[str, Optional[str]]:
+    """Open or update the item's pull request, before anything is cleaned up.
+
+    2a deferred 3: cleanup used to delete ``explore/<item>``, so a Stage 3 push
+    has to happen while the branch is still there.  Once origin holds it the
+    local branch is no longer the only copy, so cleanup takes it after all -
+    which is also what stops a later round on the same item tripping over it.
+    """
+    publisher = scm.build(config.scm)
+    _, diff_stat = pick.run_command(
+        "git diff --stat %s...%s" % (sha, space.branch), config.root
+    )
+    body = scm.pr_body(
+        item_id=item.id,
+        statement=item.statement,
+        worker_reason=reason,
+        evidence=payload.get("mutation_evidence") or {},
+        ledger_line={"ts": ledger.now(), "item": item.id, "sha": sha,
+                     "state": PR_READY, "cost": cost, "duration_s": None},
+        diff_stat=diff_stat,
+    )
+    publication = publisher.publish(
+        root=config.root,
+        branch=space.branch,
+        base=config.branch,
+        title="agent-loop: %s" % item.id,
+        body=body,
+    )
+    if publication.pull_request is None:
+        return publication.reason, None
+    space.keep_branch = False
+    return "%s %s" % (publication.reason, publication.pull_request.url), publication.pull_request.url
+
+
+def _worker_round(config: Config, selection: pick.Selection, sha: str) -> Result:
     item = selection.item
     with workspace(config.root, config.branch, config.worktree_root, item.id) as space:
         bundle = context.build_worker_bundle(
@@ -65,7 +118,7 @@ def _worker_round(config: Config, selection: pick.Selection, sha: str) -> Tuple[
         try:
             encoded = context.encode(bundle)
         except ContextTooLarge as exc:
-            return BLOCKED, str(exc), None
+            return Result(BLOCKED, str(exc))
         adapter = build(
             config.ladder("worker")[0],
             cwd=space.tree,
@@ -80,10 +133,14 @@ def _worker_round(config: Config, selection: pick.Selection, sha: str) -> Tuple[
             budget=config.budget("worker"),
         )
         if result.status != "ok":
-            return INFRA, "worker returned %s: %s" % (result.status, result.raw_tail[-800:]), result.cost
+            return Result(
+                INFRA,
+                "worker returned %s: %s" % (result.status, result.raw_tail[-800:]),
+                result.cost,
+            )
         payload: Dict[str, Any] = result.json or {}
         if payload.get("status") == "blocked":
-            return BLOCKED, "worker blocked: %s" % payload.get("reason", ""), result.cost
+            return Result(BLOCKED, "worker blocked: %s" % payload.get("reason", ""), result.cost)
         outcome = verify.verify(config, item, space.tree, sha)
         if not outcome.ok:
             # A BLOCKED that comes from verify has a diff worth reading: the
@@ -93,8 +150,8 @@ def _worker_round(config: Config, selection: pick.Selection, sha: str) -> Tuple[
             # `blocked` returned above, with nothing to keep.
             failure = _retain(space, item)
             if failure:
-                return INFRA, "%s; %s" % (outcome.reason, failure), result.cost
-            return BLOCKED, outcome.reason, result.cost
+                return Result(INFRA, "%s; %s" % (outcome.reason, failure), result.cost)
+            return Result(BLOCKED, outcome.reason, result.cost)
         evidence = payload.get("mutation_evidence") or {}
         reason = "%s; test %s; reverted %r observed %r" % (
             outcome.reason,
@@ -104,8 +161,9 @@ def _worker_round(config: Config, selection: pick.Selection, sha: str) -> Tuple[
         )
         failure = _retain(space, item)
         if failure:
-            return INFRA, failure, result.cost
-        return PR_READY, reason, result.cost
+            return Result(INFRA, failure, result.cost)
+        published, pr_url = _publish(config, space, item, sha, reason, payload, result.cost)
+        return Result(PR_READY, "%s; %s" % (reason, published), result.cost, pr_url)
 
 
 def run_once(config_path: Path) -> Outcome:
@@ -119,6 +177,7 @@ def run_once(config_path: Path) -> Outcome:
     item_id: Optional[str] = None
     sha = ""
     cost: Optional[float] = None
+    pr_url: Optional[str] = None
     try:
         sha = head_sha(config.root, config.branch)
         with lock.hold(config.root, config.worktree_root):
@@ -129,7 +188,9 @@ def run_once(config_path: Path) -> Outcome:
                 state, reason = NO_ITEM, "all selectable probes pass"
             else:
                 item_id = selection.item.id
-                state, reason, cost = _worker_round(config, selection, sha)
+                result = _worker_round(config, selection, sha)
+                state, reason, cost, pr_url = (
+                    result.state, result.reason, result.cost, result.pr_url)
     except (ConfigError, InfraError) as exc:
         records = ledger.read(config.ledger)
         state, reason = INFRA, str(exc)
@@ -154,8 +215,9 @@ def run_once(config_path: Path) -> Outcome:
             "duration_s": round(duration, 3),
             "tool_versions": versions,
             "warning": ledger.drift(records, versions),
+            "pr_url": pr_url,
         },
     )
     if notified:
         notify.notify(config, item=item_id, state=state, sha=sha, reason=reason)
-    return Outcome(state, item_id, reason, cost, duration, notified)
+    return Outcome(state, item_id, reason, cost, duration, notified, pr_url)

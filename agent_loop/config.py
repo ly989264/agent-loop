@@ -14,6 +14,7 @@ from typing import Any, Dict, List, Mapping, Optional, Tuple
 
 import yaml
 
+from . import scm as scm_module
 from .errors import ConfigError
 
 KEYS = frozenset(
@@ -28,6 +29,7 @@ KEYS = frozenset(
         "caps",
         "notify",
         "levels",
+        "scm",
     }
 )
 ROLES = ("planner", "worker", "reviewer", "diagnoser")
@@ -85,6 +87,7 @@ class Config:
     caps: Mapping[str, Budget]
     notify: Tuple[NotifyTarget, ...]
     levels: Mapping[str, str] = field(default_factory=dict)
+    scm: str = scm_module.DEFAULT
 
     def ladder(self, role: str) -> Tuple[AgentSpec, ...]:
         if role not in self.agents:
@@ -197,6 +200,12 @@ def load(path: os.PathLike) -> Config:
     if not isinstance(notify_document, list) or not notify_document:
         raise ConfigError("notify must be a non-empty list of targets")
 
+    publisher = document.get("scm", scm_module.DEFAULT)
+    if publisher not in scm_module.REGISTRY:
+        raise ConfigError(
+            "scm must be one of %s" % sorted(scm_module.REGISTRY)
+        )
+
     levels_document = document.get("levels", {})
     if not isinstance(levels_document, dict):
         raise ConfigError("levels must be a mapping of cost class to level")
@@ -218,4 +227,5 @@ def load(path: os.PathLike) -> Config:
         caps=caps,
         notify=tuple(_notify_target(target) for target in notify_document),
         levels=dict(levels_document),
+        scm=str(publisher),
     )

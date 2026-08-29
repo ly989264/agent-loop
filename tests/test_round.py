@@ -13,7 +13,7 @@ import unittest
 from agent_loop import ledger, round as round_module
 from agent_loop.states import BLOCKED, INFRA, NO_ITEM, PR_READY
 
-from support import cleanup, git_init, make_repo, write_script
+from support import cleanup, fake_gh, gh_calls, git_init, make_repo, origin_for, write_script
 
 CONFIG = """
 branch: main
@@ -87,7 +87,11 @@ class RoundTest(unittest.TestCase):
         git_init(self.root)
         return self.root / ".agent-loop" / "config.yaml"
 
+    def setUp(self):
+        self.path = os.environ["PATH"]
+
     def tearDown(self):
+        os.environ["PATH"] = self.path
         cleanup(self.root)
 
     def run_once(self, config_path):
@@ -222,6 +226,30 @@ class RoundTest(unittest.TestCase):
         self.assertIn("agent-loop: an-item", shown)
         self.assertIn("project/fixed.txt", shown)
         self.assertEqual(list((self.root / ".agent-loop" / "worktrees").iterdir()), [])
+
+    def test_a_pr_ready_round_publishes_before_cleanup_and_records_the_url(self):
+        # The push has to happen while explore/an-item still exists, and once
+        # origin holds it the local branch is no longer the only copy of the
+        # diff - so cleanup takes it, and a later round on the item can run.
+        config_path = self.build(AGENT % repr(json.dumps(ANSWER)), config=CONFIG + "scm: github\n")
+        origin = origin_for(self.root)
+        fake_gh(self.root, [{"match": ["list"], "out": "[]"},
+                            {"match": ["create"], "out": "https://github.com/o/r/pull/7\n"}])
+        outcome = self.run_once(config_path)
+        self.assertEqual(outcome.state, PR_READY)
+        self.assertEqual(outcome.pr_url, "https://github.com/o/r/pull/7")
+        record = ledger.read(self.root / ".agent-loop" / "ledger.jsonl")[-1]
+        self.assertEqual(record["pr_url"], "https://github.com/o/r/pull/7")
+        self.assertIn("https://github.com/o/r/pull/7", self.notifications()[0])
+        self.assertIn("explore/an-item", self.remote_branches(origin))
+        self.assertNotIn("explore/an-item", self.branches())
+        body = [call for call in gh_calls(self.root) if call["argv"][1] == "create"][0]["stdin"]
+        self.assertIn("project/fixed.txt", body)  # the diff explanation is real
+
+    def remote_branches(self, origin):
+        return subprocess.run(["git", "branch", "--format=%(refname:short)"],
+                              cwd=str(origin), stdout=subprocess.PIPE,
+                              universal_newlines=True).stdout.split()
 
     def test_a_tool_version_change_is_a_warning_on_the_round_s_line(self):
         blocked = dict(ANSWER, status="blocked", diff_applied=False, reason="not mine to fix")

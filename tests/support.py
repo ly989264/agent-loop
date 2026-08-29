@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import os
 import shutil
 import subprocess
@@ -109,5 +110,56 @@ def write_script(root: Path, name: str, body: str) -> Path:
     return path
 
 
+FAKE_GH = """\
+#!/usr/bin/env python3
+import json, os, sys
+argv = sys.argv[1:]
+stdin = sys.stdin.read() if "--body-file" in argv else ""
+with open(os.environ["GH_RECORD"], "a") as handle:
+    handle.write(json.dumps({"argv": argv, "stdin": stdin}) + "\\n")
+for reply in json.loads(open(os.environ["GH_REPLIES"]).read()):
+    if all(token in argv for token in reply["match"]):
+        sys.stdout.write(reply.get("out", ""))
+        sys.exit(reply.get("code", 0))
+sys.exit(0)
+"""
+
+
+def fake_gh(root: Path, replies) -> None:
+    """Put a recording ``gh`` on PATH and say what it answers.
+
+    ``replies`` is a list of {"match": [argv tokens], "out": str, "code": int};
+    the first whose tokens are all present answers.  Calls land in
+    ``root/gh_calls.jsonl`` as one JSON object each.
+    """
+    binaries = root / "bin"
+    binaries.mkdir(exist_ok=True)
+    write_script(binaries, "gh", FAKE_GH)
+    os.environ["PATH"] = "%s%s%s" % (binaries, os.pathsep, os.environ["PATH"])
+    os.environ["GH_RECORD"] = str(root / "gh_calls.jsonl")
+    os.environ["GH_REPLIES"] = str(root / "gh_replies.json")
+    (root / "gh_replies.json").write_text(json.dumps(replies), encoding="utf-8")
+
+
+def gh_calls(root: Path):
+    path = root / "gh_calls.jsonl"
+    if not path.exists():
+        return []
+    return [json.loads(line) for line in path.read_text().splitlines() if line.strip()]
+
+
+def origin_for(root: Path) -> Path:
+    """A bare repository the round can really push to."""
+    bare = root.parent / (root.name + "-origin.git")
+    subprocess.run(["git", "init", "--bare", "-b", "main", str(bare)],
+                   stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, check=True)
+    subprocess.run(["git", "remote", "add", "origin", str(bare)], cwd=str(root),
+                   stdout=subprocess.DEVNULL, check=True)
+    subprocess.run(["git", "push", "-q", "origin", "main"], cwd=str(root),
+                   stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, check=True)
+    return bare
+
+
 def cleanup(root: Path) -> None:
     shutil.rmtree(root, ignore_errors=True)
+    shutil.rmtree(root.parent / (root.name + "-origin.git"), ignore_errors=True)
