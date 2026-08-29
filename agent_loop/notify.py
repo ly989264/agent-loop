@@ -22,8 +22,13 @@ def line(
 
     A round with nothing to decide - NO_ITEM, INFRA, a BLOCKED with no pull
     request - carries no prefix, because there is no question in it.
+
+    The reason is flattened onto the one line: a git error, or a failing
+    check's output, arrives with newlines in it, and a file target writes one
+    line per notification - so an unflattened reason records one notification
+    as several, which is what anyone counting them reads.
     """
-    text = "%-8s %-44s %s  %s" % (state, item or "-", sha[:12], reason)
+    text = "%-8s %-44s %s  %s" % (state, item or "-", sha[:12], " ".join(str(reason).split()))
     return text if decision is None else "%-6s %s" % (decision, text)
 
 
