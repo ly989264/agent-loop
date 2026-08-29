@@ -11,7 +11,7 @@ import os
 import time
 import unittest
 
-from agent_loop import config as config_module, ledger, modes
+from agent_loop import config as config_module, ledger, modes, round as round_module
 from agent_loop.states import BLOCKED, INFRA, NO_ITEM, PR_READY
 
 from support import cleanup, fake_gh, git_init, make_repo, origin_for, write_script
@@ -367,6 +367,43 @@ class MetricsReportTest(ModesTestBase):
         self.assertIn("no PRs yet", report)
         self.assertIn("no notified_at recorded", report)
         self.assertIn("no merged PR cost recorded", report)
+
+    def test_a_re_published_pr_counts_once_by_its_latest_round(self):
+        # Stage 4b review round 1, defect: plumbing share used to count every
+        # PR_READY round that touched a pr_url, not every distinct pull
+        # request - a re-publish (BLOCKED, fixed, published again) inflated
+        # both the denominator and the plumbing count.
+        config_path = self.build()
+        config = config_module.load(config_path)
+        ledger.append(config.ledger, {
+            "ts": "2026-08-29T00:00:00Z", "item": "a", "sha": "s1", "state": PR_READY,
+            "reason": "first publish", "cost": 1.0, "duration_s": 10.0, "pr_url": "u/a",
+            "diff_stat": " project/x.py | 2 +-\n",
+        })
+        ledger.append(config.ledger, {
+            "ts": "2026-08-29T00:05:00Z", "item": "a", "sha": "s2", "state": PR_READY,
+            "reason": "re-published after a fix", "cost": 1.0, "duration_s": 8.0,
+            "pr_url": "u/a", "diff_stat": " .agent-loop/config.yaml | 1 +-\n",
+        })
+        report = modes.metrics_report(config)
+        self.assertIn("opened=1", report)  # one pull request, not two rounds
+        self.assertIn("plumbing share     1/1 PR(s)", report)  # the latest diff
+
+
+class CountOpenedTest(unittest.TestCase):
+    def test_the_first_round_to_open_a_pull_request_counts(self):
+        outcome = round_module.Outcome(PR_READY, "a", "r", 1.0, 1.0, True, "u/a")
+        self.assertEqual(modes._count_opened(outcome, set()), 1)
+
+    def test_a_re_publish_of_the_same_pull_request_does_not_count_again(self):
+        seen = {"u/a"}
+        outcome = round_module.Outcome(PR_READY, "a", "r", 1.0, 1.0, True, "u/a")
+        self.assertEqual(modes._count_opened(outcome, seen), 0)
+        self.assertEqual(seen, {"u/a"})
+
+    def test_a_round_with_no_pull_request_does_not_count(self):
+        outcome = round_module.Outcome(NO_ITEM, None, "r", None, 1.0, True, None)
+        self.assertEqual(modes._count_opened(outcome, set()), 0)
 
 
 if __name__ == "__main__":

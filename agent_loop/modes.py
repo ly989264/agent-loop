@@ -24,7 +24,7 @@ import time
 from collections import Counter
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Dict, List, Optional, Tuple
+from typing import Any, Dict, List, Optional, Set, Tuple
 
 from . import config as config_module, ledger, notify, round as round_module, scm
 from .config import Config
@@ -150,12 +150,24 @@ def _wait_while_open_prs_at_cap(
         time.sleep(config.poll_s)
 
 
+def _count_opened(outcome: round_module.Outcome, opened_pr_urls: Set[str]) -> int:
+    """1 if this round opened a pull request this session has not counted yet,
+    else 0. A re-publish of the same pull request (BLOCKED, fixed, published
+    again) is not a new open - counted by distinct pr_url, same as metrics'
+    plumbing share."""
+    if outcome.state == PR_READY and outcome.pr_url and outcome.pr_url not in opened_pr_urls:
+        opened_pr_urls.add(outcome.pr_url)
+        return 1
+    return 0
+
+
 def run_continuous(config_path: Path, stop: Optional[Stop] = None) -> int:
     """``continuous`` with no ``stop``; ``until`` with one. Runs until then."""
     config = config_module.load(config_path)
     publisher = scm.build(config.scm)
     started = time.time()
     prs_opened = 0
+    opened_pr_urls: Set[str] = set()
     cost_spent = 0.0
     non_progress = 0
     last_backlog_mtime = _backlog_mtime(config.backlog)
@@ -168,7 +180,7 @@ def run_continuous(config_path: Path, stop: Optional[Stop] = None) -> int:
             continue
 
         outcome = round_module.run_once(config_path)
-        prs_opened += 1 if outcome.state == PR_READY and outcome.pr_url else 0
+        prs_opened += _count_opened(outcome, opened_pr_urls)
         cost_spent += outcome.cost or 0.0
         if stop is not None and _stop_met(stop, started, prs_opened, cost_spent):
             return 0
@@ -195,19 +207,20 @@ def metrics_report(config: Config) -> str:
     records = ledger.read(config.ledger)
     rounds = [record for record in records if record.get("duration_s") is not None]
     counts = Counter(record.get("state") for record in rounds)
-    pr_rounds = [record for record in rounds
-                if record.get("state") == PR_READY and record.get("pr_url")]
-    pr_urls = {record["pr_url"] for record in pr_rounds}
+    # One entry per distinct pull request, not per round that touched it: a
+    # re-published PR (BLOCKED, fixed, published again) is one PR, and its
+    # latest round is the one whose diff_stat and cost describe it now.
+    pr_by_url: Dict[str, Dict[str, Any]] = {}
+    for record in rounds:
+        if record.get("state") == PR_READY and record.get("pr_url"):
+            pr_by_url[record["pr_url"]] = record
+    pr_urls = set(pr_by_url)
     merged = {record["pr_url"] for record in records
              if record.get("pr_state") == "MERGED" and record.get("pr_url")}
-    cost_by_pr: Dict[str, float] = {}
-    plumbing = 0
-    for record in pr_rounds:
-        url = record["pr_url"]
-        if url not in cost_by_pr and record.get("cost") is not None:
-            cost_by_pr[url] = record["cost"]
-        if _touches_plumbing(record.get("diff_stat") or ""):
-            plumbing += 1
+    cost_by_pr = {url: rec["cost"] for url, rec in pr_by_url.items() if rec.get("cost") is not None}
+    plumbing = sum(
+        1 for rec in pr_by_url.values() if _touches_plumbing(rec.get("diff_stat") or "")
+    )
     merged_costs = [cost_by_pr[url] for url in merged if url in cost_by_pr]
     gaps = [
         ledger.epoch(record["notified_at"]) - ledger.epoch(record["ts"])
