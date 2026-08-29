@@ -1,6 +1,6 @@
 """One round, in mode ``once``.
 
-    lock-free pick -> worktree -> worker (bounded bundle, one repair) -> verify
+    lock -> pick -> worktree -> worker (bounded bundle, one repair) -> verify
     -> ledger line -> one notification
 
 It ends in exactly one of the four terminal states, and emits exactly one
