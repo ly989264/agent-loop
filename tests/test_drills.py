@@ -82,6 +82,19 @@ TWO_ITEMS = ONE_ITEM + """\
 """
 
 
+PASSING_ITEM = """
+items:
+  - id: an-item
+    group: g
+    statement: nothing to do
+    cost_class: hermetic
+    selectable: true
+    sites: []
+    design_doc: ""
+    probe: "exit 0"
+"""
+
+
 DONE = {
     "diff_applied": True,
     "test_path": "project/tests/test_thing.py",
@@ -352,6 +365,42 @@ class KilledWorkerDrill(DrillCase):
         except ProcessLookupError:
             return False
         return True
+
+
+class OpenPullRequestCapDrill(DrillCase):
+    """Drill 6 - with `caps.open_prs: 1` and one open pull request, `until` runs
+    no round at all; when the forge says that pull request merged, a round runs.
+
+    Watched to fail with `modes._wait_while_open_prs_at_cap` returning False at
+    once: a round then runs while the cap is reached.
+    """
+
+    CAPPED = (CONFIG.replace("poll_s: 1", "poll_s: 1\n  open_prs: 1") + "scm: github\n")
+
+    def test_the_open_pr_cap_runs_no_round_until_the_pull_request_is_merged(self):
+        self.consumer(answering(TALKING_AGENT, DONE), config=self.CAPPED,
+                      backlog=PASSING_ITEM)
+        ledger.append(self.root / ".agent-loop" / "ledger.jsonl", {
+            "ts": "2026-08-29T00:00:00Z", "item": "an-item", "sha": "old", "state": PR_READY,
+            "reason": "opened", "duration_s": 1.0, "pr_url": "https://github.com/o/r/pull/7",
+        })
+        fake_gh(self.root, [{"match": ["view"], "out": '{"state": "OPEN"}'}])
+
+        code, _ = self.run_cli(["run", "--config", str(self.config_path), "--mode", "until",
+                                "--until-hours", "0.0002"])
+        self.assertEqual(code, 0)
+        self.assertEqual(self.states(), [PR_READY])  # the seeded line, and nothing else
+        self.assertEqual(self.notifications(), [])
+
+        (self.root / "gh_replies.json").write_text(
+            json.dumps([{"match": ["view"], "out": '{"state": "MERGED"}'}]), encoding="utf-8")
+        code, _ = self.run_cli(["run", "--config", str(self.config_path), "--mode", "until",
+                                "--until-hours", "0.0002"])
+        self.assertEqual(code, 0)
+        self.assertEqual([record["pr_state"] for record in self.records()][1], "MERGED")
+        rounds = [record for record in self.records() if record.get("duration_s") is not None]
+        self.assertGreaterEqual(len(rounds), 2)
+        self.assertEqual(rounds[-1]["state"], NO_ITEM)
 
 
 if __name__ == "__main__":
