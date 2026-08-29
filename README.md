@@ -30,14 +30,16 @@ L1 and L2, no Docker handling.
               record; local-only opens nothing
 6  review     the reviewer agent reads the item, the diff and §0's finding
               classes and answers findings; they become one pull-request
-              comment, and are not fed back to the worker
+              comment - the ledger's review_posted, not a marker on GitHub, is
+              what stops a second - and are not fed back to the worker
 7  merge      L1 leaves the pull request open; L2 squash-merges it when the
               reviewer returned no contract or defect finding and nothing is
               held.  A protected path, or a diff verify flagged, never merges
               at any level: the round says DECIDE instead, and a DECIDE nobody
               answered in 24 h makes the next round on that item BLOCKED
 8  ledger     one JSONL line: ts, item, sha, state, reason, cost, duration_s,
-              tool_versions (drift is a warning, never a gate), pr_url, decision
+              tool_versions (drift is a warning, never a gate), pr_url,
+              decision, review_posted
 9  notify     one notification per (item, state, sha), to every configured
               target, prefixed FYI or DECIDE where the round has a question
 10 cleanup    the worktree, the round's temp dir, and the explore/ branch once

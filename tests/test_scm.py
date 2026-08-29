@@ -75,25 +75,19 @@ class GitHubPublisherTest(unittest.TestCase):
         with self.assertRaises(InfraError):
             self.publish([{"match": ["list"], "out": "boom", "code": 1}])
 
-    def test_one_review_comment_is_posted_and_a_second_round_posts_none(self):
-        fake_gh(self.root, [{"match": ["view"], "out": '{"comments": []}'}])
+    def test_a_comment_is_one_gh_call_and_reads_nothing_back_off_the_forge(self):
+        # Invariant 4: no loop state on GitHub. The publisher posts what it is
+        # given and never inspects the comments to decide whether to.
+        fake_gh(self.root, [])
         pull = scm.PullRequest(url="https://github.com/o/r/pull/7", created=True)
         body = scm.review_comment([{"kind": "defect", "location": "a.py:1",
                                     "claim": "c", "citation": "cite"}])
-        self.assertTrue(self.publisher.comment(self.root, pull, body))
-        posted = [call for call in gh_calls(self.root) if call["argv"][1] == "comment"]
-        self.assertEqual(len(posted), 1)
-        self.assertIn(scm.REVIEW_MARKER, posted[0]["stdin"])
-        self.assertIn("**defect** at `a.py:1`", posted[0]["stdin"])
-
-        # the marker the first comment carries is what stops the second
-        os.environ["GH_REPLIES"] = str(self.root / "gh_replies.json")
-        (self.root / "gh_replies.json").write_text(
-            '[{"match": ["view"], "out": "{\\"comments\\": [{\\"body\\": \\"%s x\\"}]}"}]'
-            % scm.REVIEW_MARKER, encoding="utf-8")
-        self.assertFalse(self.publisher.comment(self.root, pull, body))
-        posted = [call for call in gh_calls(self.root) if call["argv"][1] == "comment"]
-        self.assertEqual(len(posted), 1)
+        self.publisher.comment(self.root, pull, body)
+        calls = gh_calls(self.root)
+        self.assertEqual([call["argv"][:3] for call in calls],
+                         [["pr", "comment", "https://github.com/o/r/pull/7"]])
+        self.assertIn("**defect** at `a.py:1`", calls[0]["stdin"])
+        self.assertNotIn("<!--", calls[0]["stdin"])
 
 
 class LocalOnlyPublisherTest(unittest.TestCase):

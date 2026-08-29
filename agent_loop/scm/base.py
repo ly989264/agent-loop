@@ -18,7 +18,6 @@ from typing import Any, Mapping, Optional, Sequence, Tuple
 
 from ..errors import InfraError
 
-REVIEW_MARKER = "<!-- agent-loop:review -->"
 FORGE_TIMEOUT_S = 300
 
 
@@ -47,7 +46,7 @@ class Publisher:
         raise NotImplementedError
 
     def comment(self, root: Path, pull_request: PullRequest, body: str) -> bool:
-        """Post one comment carrying ``REVIEW_MARKER``; False if one is already there."""
+        """Post one comment.  Whether one is wanted is the ledger's answer, not the forge's."""
         raise NotImplementedError
 
     def merge(self, root: Path, pull_request: PullRequest) -> str:
@@ -126,8 +125,13 @@ def pr_body(
 
 
 def review_comment(findings: Sequence[Mapping[str, Any]]) -> str:
-    """The one comment the reviewer's findings become, carrying the dedup marker."""
-    lines = [REVIEW_MARKER, "## Reviewer findings", ""]
+    """The one comment the reviewer's findings become.
+
+    It carries no marker: invariant 4 keeps loop state off GitHub, and whether a
+    review was already posted for this pull request is a question the ledger
+    answers.
+    """
+    lines = ["## Reviewer findings", ""]
     if not findings:
         lines.append("No findings.")
     for finding in findings:

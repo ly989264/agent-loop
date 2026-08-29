@@ -5,14 +5,7 @@ from __future__ import annotations
 from typing import Dict, Type
 
 from ..errors import ConfigError
-from .base import (
-    Publication,
-    Publisher,
-    PullRequest,
-    REVIEW_MARKER,
-    pr_body,
-    review_comment,
-)
+from .base import Publication, Publisher, PullRequest, pr_body, review_comment
 from .github import GitHubPublisher
 from .local_only import LocalOnlyPublisher
 
@@ -28,7 +21,6 @@ __all__ = [
     "Publisher",
     "PullRequest",
     "REGISTRY",
-    "REVIEW_MARKER",
     "build",
     "pr_body",
     "review_comment",

@@ -12,7 +12,7 @@ from __future__ import annotations
 import time
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Dict, List, Mapping, Optional, Tuple
+from typing import Any, Dict, List, Mapping, Optional, Sequence, Tuple
 
 from . import (
     backlog, config as config_module, context, ledger, level, lock, notify, pick, scm, verify,
@@ -46,6 +46,7 @@ class Result:
     cost: Optional[float] = None
     pr_url: Optional[str] = None
     decision: Optional[str] = None
+    review_posted: bool = False
 
 
 def _retain(space: Workspace, item: backlog.Item) -> Optional[str]:
@@ -67,6 +68,7 @@ def _retain(space: Workspace, item: backlog.Item) -> Optional[str]:
 
 def _publish(
     config: Config,
+    records: Sequence[Dict[str, Any]],
     space: Workspace,
     item: backlog.Item,
     sha: str,
@@ -74,7 +76,7 @@ def _publish(
     payload: Mapping[str, Any],
     cost: Optional[float],
     outcome: verify.VerifyOutcome,
-) -> Tuple[str, Optional[str], Optional[str]]:
+) -> Tuple[str, Optional[str], Optional[str], bool]:
     """Open or update the item's pull request, before anything is cleaned up.
 
     2a deferred 3: cleanup used to delete ``explore/<item>``, so a Stage 3 push
@@ -103,9 +105,11 @@ def _publish(
         body=body,
     )
     if publication.pull_request is None:
-        return publication.reason, None, None
+        return publication.reason, None, None, False
     space.keep_branch = False
-    findings, note = _review(config, publisher, item, sha, space.branch, publication.pull_request)
+    findings, note, posted = _review(
+        config, records, publisher, item, sha, space.branch, publication.pull_request
+    )
     chosen = level.decide(
         config.level(item.cost_class), findings, outcome.protected, outcome.ok
     )
@@ -118,17 +122,19 @@ def _publish(
         "%s; %s; %s" % (publication.pull_request.url, note, chosen.reason),
         publication.pull_request.url,
         chosen.decision,
+        posted,
     )
 
 
 def _review(
     config: Config,
+    records: Sequence[Dict[str, Any]],
     publisher: scm.Publisher,
     item: backlog.Item,
     sha: str,
     branch: str,
     pull_request: scm.PullRequest,
-) -> Tuple[List[Dict[str, Any]], str]:
+) -> Tuple[List[Dict[str, Any]], str, bool]:
     """Ask the reviewer about the published diff and post its findings, once.
 
     The findings are posted and nothing else: they are not fed back to the
@@ -136,6 +142,10 @@ def _review(
     is said so on the round's line and never costs the round its pull request -
     the change is already published, and losing it to a review failure would
     lose the thing the round exists to produce.
+
+    A pull request the ledger already records a posted review for gets no second
+    comment.  The ledger is asked, not the forge: a marker read back off the
+    comments would be loop state living on GitHub.
     """
     try:
         _, diff = pick.run_command("git diff %s...%s" % (sha, branch), config.root)
@@ -151,21 +161,22 @@ def _review(
             budget=config.budget("reviewer"),
         )
     except (ConfigError, InfraError, ContextTooLarge) as exc:
-        return [], "no review: %s" % exc
+        return [], "no review: %s" % exc, False
     if result.status != "ok":
-        return [], "no review: reviewer returned %s" % result.status
+        return [], "no review: reviewer returned %s" % result.status, False
     findings = (result.json or {}).get("findings") or []
+    if ledger.reviewed(records, pull_request.url):
+        return findings, "%d finding(s), already commented" % len(findings), False
     try:
-        posted = publisher.comment(config.root, pull_request, scm.review_comment(findings))
+        publisher.comment(config.root, pull_request, scm.review_comment(findings))
     except InfraError as exc:
-        return findings, "%d finding(s), not posted: %s" % (len(findings), exc)
-    return findings, "%d finding(s), %s" % (
-        len(findings),
-        "posted" if posted else "already commented",
-    )
+        return findings, "%d finding(s), not posted: %s" % (len(findings), exc), False
+    return findings, "%d finding(s), posted" % len(findings), True
 
 
-def _worker_round(config: Config, selection: pick.Selection, sha: str) -> Result:
+def _worker_round(
+    config: Config, records: Sequence[Dict[str, Any]], selection: pick.Selection, sha: str
+) -> Result:
     item = selection.item
     with workspace(config.root, config.branch, config.worktree_root, item.id) as space:
         bundle = context.build_worker_bundle(
@@ -223,10 +234,12 @@ def _worker_round(config: Config, selection: pick.Selection, sha: str) -> Result
         failure = _retain(space, item)
         if failure:
             return Result(INFRA, failure, result.cost)
-        published, pr_url, decision = _publish(
-            config, space, item, sha, reason, payload, result.cost, outcome
+        published, pr_url, decision, posted = _publish(
+            config, records, space, item, sha, reason, payload, result.cost, outcome
         )
-        return Result(PR_READY, "%s; %s" % (reason, published), result.cost, pr_url, decision)
+        return Result(
+            PR_READY, "%s; %s" % (reason, published), result.cost, pr_url, decision, posted
+        )
 
 
 def run_once(config_path: Path) -> Outcome:
@@ -242,6 +255,7 @@ def run_once(config_path: Path) -> Outcome:
     cost: Optional[float] = None
     pr_url: Optional[str] = None
     decision: Optional[str] = None
+    review_posted: bool = False
     try:
         sha = head_sha(config.root, config.branch)
         with lock.hold(config.root, config.worktree_root):
@@ -262,9 +276,10 @@ def run_once(config_path: Path) -> Outcome:
                 if stale:
                     state, reason = BLOCKED, stale
                 else:
-                    result = _worker_round(config, selection, sha)
-                    state, reason, cost, pr_url, decision = (
-                        result.state, result.reason, result.cost, result.pr_url, result.decision)
+                    result = _worker_round(config, records, selection, sha)
+                    state, reason, cost, pr_url, decision, review_posted = (
+                        result.state, result.reason, result.cost, result.pr_url,
+                        result.decision, result.review_posted)
     except (ConfigError, InfraError) as exc:
         records = ledger.read(config.ledger)
         state, reason = INFRA, str(exc)
@@ -291,6 +306,7 @@ def run_once(config_path: Path) -> Outcome:
             "warning": ledger.drift(records, versions),
             "pr_url": pr_url,
             "decision": decision,
+            "review_posted": review_posted,
         },
     )
     if notified:

@@ -13,7 +13,7 @@ from pathlib import Path
 from typing import Optional
 
 from ..errors import InfraError
-from .base import Publication, Publisher, PullRequest, REVIEW_MARKER, run
+from .base import Publication, Publisher, PullRequest, run
 
 
 class GitHubPublisher(Publisher):
@@ -71,17 +71,6 @@ class GitHubPublisher(Publisher):
         return PullRequest(url=str(listed[0]["url"]), created=False)
 
     def comment(self, root: Path, pull_request: PullRequest, body: str) -> bool:
-        code, output = run(
-            ["gh", "pr", "view", pull_request.url, "--json", "comments"], cwd=root
-        )
-        if code != 0:
-            raise InfraError("cannot read comments on %s: %s" % (pull_request.url, output.strip()[-800:]))
-        try:
-            comments = json.loads(output or "{}").get("comments") or []
-        except ValueError:
-            raise InfraError("gh pr view did not answer JSON: %s" % output.strip()[-800:])
-        if any(REVIEW_MARKER in str(comment.get("body", "")) for comment in comments):
-            return False
         code, output = run(
             ["gh", "pr", "comment", pull_request.url, "--body-file", "-"],
             cwd=root,

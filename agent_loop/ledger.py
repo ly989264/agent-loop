@@ -22,6 +22,7 @@ FIELDS = (
     "warning",
     "pr_url",
     "decision",
+    "review_posted",
 )
 
 
@@ -79,6 +80,18 @@ def already_notified(
         if (str(record.get("item") or ""), record.get("state"), record.get("sha")) == key:
             return True
     return False
+
+
+def reviewed(records: Sequence[Dict[str, Any]], pr_url: str) -> bool:
+    """Whether a review comment was already posted on this pull request.
+
+    The ledger is the loop's only state (invariant 4), so this is where the
+    question is asked - not by reading a marker back off the forge, which would
+    be loop state living on GitHub.
+    """
+    return any(
+        record.get("pr_url") == pr_url and record.get("review_posted") for record in records
+    )
 
 
 def drift(records: Sequence[Dict[str, Any]], versions: Mapping[str, str]) -> Optional[str]:

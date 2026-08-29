@@ -10,7 +10,7 @@ import os
 import subprocess
 import unittest
 
-from agent_loop import ledger, round as round_module, scm
+from agent_loop import ledger, round as round_module
 from agent_loop.states import BLOCKED, INFRA, NO_ITEM, PR_READY
 
 from support import cleanup, fake_gh, gh_calls, git_init, make_repo, origin_for, write_script
@@ -292,11 +292,13 @@ class RoundTest(unittest.TestCase):
         comments = [call for call in gh_calls(self.root) if call["argv"][1] == "comment"]
         self.assertEqual(len(comments), 1)
         self.assertIn("**suggestion** at `project/fixed.txt:1`", comments[0]["stdin"])
+        self.assertNotIn("<!--", comments[0]["stdin"])  # invariant 4: no marker
         self.assertIn("the file could say more", comments[0]["stdin"])
 
+        record = ledger.read(self.root / ".agent-loop" / "ledger.jsonl")[-1]
+        self.assertTrue(record["review_posted"])
         (self.root / "gh_replies.json").write_text(json.dumps(
-            [{"match": ["list"], "out": '[{"url": "https://github.com/o/r/pull/7"}]'},
-             {"match": ["view"], "out": '{"comments": [{"body": "%s"}]}' % scm.REVIEW_MARKER}]),
+            [{"match": ["list"], "out": '[{"url": "https://github.com/o/r/pull/7"}]'}]),
             encoding="utf-8")
         second = self.run_once(config_path)
         self.assertEqual(second.state, PR_READY)
