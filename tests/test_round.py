@@ -364,6 +364,30 @@ class RoundTest(unittest.TestCase):
         self.assertNotIn("explore/an-item", self.branches())
         self.assertEqual([call["argv"][1] for call in gh_calls(self.root)], ["view"])
 
+    def test_a_failed_publish_leaves_the_item_re_runnable(self):
+        # A kept explore/ branch with no pull request behind it wedges the item:
+        # every later round fails at `git worktree add -b`. Both halves of the
+        # publish are checked - the push, and gh after a push that succeeded.
+        for kind in ("create", "push"):
+            with self.subTest(kind=kind):
+                config_path = self.build(AGENT % repr(json.dumps(ANSWER)),
+                                         config=CONFIG + "scm: github\n")
+                origin = origin_for(self.root)
+                fake_gh(self.root, [{"match": ["list"], "out": "[]"},
+                                    {"match": ["create"], "out": "no", "code": 1}])
+                if kind == "push":
+                    subprocess.run(["git", "remote", "set-url", "origin", "/nowhere.git"],
+                                   cwd=str(self.root), check=True)
+                outcome = self.run_once(config_path)
+                self.assertEqual(outcome.state, INFRA)
+                self.assertIsNone(outcome.pr_url)
+                self.assertNotIn("explore/an-item", self.branches())
+                self.assertEqual(list((self.root / ".agent-loop" / "worktrees").iterdir()), [])
+                if kind == "create":
+                    # the push had already landed, which is why the local copy goes
+                    self.assertIn("explore/an-item", self.remote_branches(origin))
+                self.tearDown()
+
     def test_a_tool_version_change_is_a_warning_on_the_round_s_line(self):
         blocked = dict(ANSWER, status="blocked", diff_applied=False, reason="not mine to fix")
         config_path = self.build(BLOCKING_AGENT % repr(json.dumps(blocked)))

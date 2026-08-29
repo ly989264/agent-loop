@@ -97,13 +97,21 @@ def _publish(
                      "state": PR_READY, "cost": cost, "duration_s": None},
         diff_stat=diff_stat,
     )
-    publication = publisher.publish(
-        root=config.root,
-        branch=space.branch,
-        base=config.branch,
-        title="agent-loop: %s" % item.id,
-        body=body,
-    )
+    try:
+        publication = publisher.publish(
+            root=config.root,
+            branch=space.branch,
+            base=config.branch,
+            title="agent-loop: %s" % item.id,
+            body=body,
+        )
+    except InfraError:
+        # A publish that fails part-way may already have put explore/<item> on
+        # origin.  Keeping the local branch as well would make every later round
+        # on this item INFRA at `git worktree add -b`, so the branch goes and the
+        # item stays re-runnable; what the round did is in the reason below.
+        space.keep_branch = False
+        raise
     if publication.pull_request is None:
         return publication.reason, None, None, False
     space.keep_branch = False
