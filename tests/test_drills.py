@@ -69,6 +69,19 @@ items:
 """
 
 
+TWO_ITEMS = ONE_ITEM + """\
+  - id: another-item
+    group: g
+    statement: a second open item
+    cost_class: hermetic
+    selectable: true
+    sites: []
+    design_doc: "docs/design.md 2"
+    probe: "test -f other.txt"
+    proof: "the probe exits 0 once the other file is there"
+"""
+
+
 DONE = {
     "diff_applied": True,
     "test_path": "project/tests/test_thing.py",
@@ -79,6 +92,10 @@ DONE = {
 }
 
 
+BLOCKED_ANSWER = dict(DONE, status="blocked", diff_applied=False,
+                      reason="the design doc forbids it")
+
+
 FIXING_AGENT = """\
 #!/usr/bin/env python3
 import sys
@@ -86,6 +103,16 @@ sys.stdin.read()
 open("project/fixed.txt", "w").write("fixed\\n")
 print(__ANSWER__)
 """
+
+
+TALKING_AGENT = """\
+#!/usr/bin/env python3
+import sys
+sys.stdin.read()
+print(__ANSWER__)
+"""
+
+# Records every call, then answers something that is not a JSON object at all.
 
 
 GARBLED_AGENT = """\
@@ -224,6 +251,50 @@ class MalformedWorkerDrill(DrillCase):
         self.assertEqual(len(self.notifications()), 1)
         self.assertEqual(self.worktree_root_entries(), [])
         self.assertEqual([name for name in self.branches() if name.startswith("explore/")], [])
+
+
+class BlockedItemDrill(DrillCase):
+    """Drill 3 - a BLOCKED item notifies once and is skipped at that sha; the
+    round after it picks the next failing item, then NO_ITEM.  Committing a
+    backlog edit moves the sha and re-admits it; touching the file does not.
+
+    Watched to fail with `pick.run_probes` ignoring its skip set: the second
+    run then picks the blocked item again instead of `another-item`.
+    """
+
+    def test_a_blocked_item_notifies_once_is_skipped_and_returns_when_the_sha_moves(self):
+        self.consumer(answering(TALKING_AGENT, BLOCKED_ANSWER), backlog=TWO_ITEMS)
+        first_sha = self.git("rev-parse", "main").strip()
+
+        code, _ = self.once()
+        self.assertEqual((code, self.records()[0]["item"]), (1, "an-item"))
+        code, _ = self.once()
+        self.assertEqual((code, self.records()[1]["item"]), (1, "another-item"))
+        code, _ = self.once()
+        self.assertEqual((code, self.records()[2]["item"]), (0, None))
+        self.assertEqual(self.states(), [BLOCKED, BLOCKED, NO_ITEM])
+        self.assertEqual(len(self.notifications()), 3)
+
+        # an edit that only moves the mtime is a continuous-mode trigger, not a
+        # re-admission: `pick` skips what is BLOCKED at *this sha*
+        backlog = self.root / ".agent-loop" / "backlog.yaml"
+        backlog.write_text(backlog.read_text() + "# touched\n", encoding="utf-8")
+        code, _ = self.once()
+        self.assertEqual((code, self.states()[-1]), (0, NO_ITEM))
+
+        self.git("add", "-A")
+        self.git("-c", "user.name=t", "-c", "user.email=t@t", "commit", "-m", "edit the backlog")
+        self.assertNotEqual(self.git("rev-parse", "main").strip(), first_sha)
+        code, _ = self.once()
+        self.assertEqual((code, self.records()[-1]["item"]), (1, "an-item"))
+        self.assertEqual(self.states()[-1], BLOCKED)
+        # the fourth round said nothing new: (None, NO_ITEM, sha) was already a line
+        self.assertEqual(len(self.notifications()), 4)
+        # and the blocked round at the first sha happened once, not twice
+        blocked_at_first = [record for record in self.records()
+                            if record["state"] == BLOCKED and record["sha"] == first_sha
+                            and record["item"] == "an-item"]
+        self.assertEqual(len(blocked_at_first), 1)
 
 
 if __name__ == "__main__":
