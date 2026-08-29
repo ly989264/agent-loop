@@ -75,6 +75,17 @@ class GitHubPublisherTest(unittest.TestCase):
         with self.assertRaises(InfraError):
             self.publish([{"match": ["list"], "out": "boom", "code": 1}])
 
+    def test_state_reads_the_raw_gh_state_and_is_open_is_derived_from_it(self):
+        fake_gh(self.root, [{"match": ["view"], "out": '{"state": "MERGED"}'}])
+        self.assertEqual(self.publisher.state(self.root, "https://github.com/o/r/pull/7"),
+                         "MERGED")
+        self.assertFalse(self.publisher.is_open(self.root, "https://github.com/o/r/pull/7"))
+
+    def test_state_is_none_when_gh_cannot_answer(self):
+        fake_gh(self.root, [{"match": ["view"], "out": "boom", "code": 1}])
+        self.assertIsNone(self.publisher.state(self.root, "https://github.com/o/r/pull/7"))
+        self.assertIsNone(self.publisher.is_open(self.root, "https://github.com/o/r/pull/7"))
+
     def test_a_comment_is_one_gh_call_and_reads_nothing_back_off_the_forge(self):
         # Invariant 4: no loop state on GitHub. The publisher posts what it is
         # given and never inspects the comments to decide whether to.
@@ -98,6 +109,7 @@ class LocalOnlyPublisherTest(unittest.TestCase):
         self.assertIsNone(publication.pull_request)
         self.assertIn("no pull request", publication.reason)
         self.assertIsNone(publisher.is_open(None, "u"))
+        self.assertIsNone(publisher.state(None, "u"))
 
 
 class BodyTest(unittest.TestCase):

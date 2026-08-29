@@ -57,6 +57,10 @@ class Publisher:
         """Whether the pull request is still open, or None when it cannot be read."""
         raise NotImplementedError
 
+    def state(self, root: Path, url: str) -> Optional[str]:
+        """The pull request's raw state (``OPEN``/``MERGED``/``CLOSED``), or None."""
+        raise NotImplementedError
+
 
 def run(
     argv: Sequence[str],

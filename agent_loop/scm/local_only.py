@@ -29,3 +29,6 @@ class LocalOnlyPublisher(Publisher):
 
     def is_open(self, root: Path, url: str) -> Optional[bool]:
         return None
+
+    def state(self, root: Path, url: str) -> Optional[str]:
+        return None

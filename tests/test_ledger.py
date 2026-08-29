@@ -74,6 +74,42 @@ class LedgerTest(unittest.TestCase):
         self.assertTrue(ledger.already_notified(
             [{"item": None, "sha": "one", "state": "NO_ITEM"}], None, "NO_ITEM", "one"))
 
+    def test_epoch_reads_a_ledger_timestamp_and_is_infinite_on_junk(self):
+        self.assertEqual(ledger.epoch("2026-08-29T00:00:00Z"), 1787961600.0)
+        self.assertEqual(ledger.epoch(None), float("inf"))
+        self.assertEqual(ledger.epoch("not a timestamp"), float("inf"))
+
+    def test_open_pull_requests_assumes_pr_ready_open_until_told_otherwise(self):
+        records = [
+            {"item": "a", "sha": "s", "state": PR_READY, "pr_url": "u/a"},
+            {"item": "b", "sha": "s", "state": PR_READY, "pr_url": "u/b"},
+            {"item": "b", "sha": "s", "state": PR_READY, "pr_url": "u/b", "pr_state": "MERGED"},
+        ]
+        self.assertEqual(ledger.open_pull_requests(records), {"a": records[0]})
+
+    def test_open_pull_requests_ignores_items_with_no_pull_request(self):
+        records = [{"item": "a", "sha": "s", "state": BLOCKED}]
+        self.assertEqual(ledger.open_pull_requests(records), {})
+
+    def test_note_pr_state_appends_a_line_that_reads_as_pr_ready_with_no_duration(self):
+        ledger.note_pr_state(self.path, item="a", sha="s", pr_url="u/a", pr_state="MERGED")
+        [record] = ledger.read(self.path)
+        self.assertEqual(record["state"], PR_READY)
+        self.assertEqual(record["pr_state"], "MERGED")
+        self.assertIsNone(record["duration_s"])
+
+    def test_reopened_since_is_true_only_for_a_blocked_round_older_than_the_mtime(self):
+        records = [
+            {"item": "a", "sha": "s", "state": BLOCKED, "ts": "2020-01-01T00:00:00Z",
+             "duration_s": 1.0},
+        ]
+        self.assertTrue(ledger.reopened_since(records, ledger.epoch("2026-08-29T00:00:00Z")))
+        self.assertFalse(ledger.reopened_since(records, ledger.epoch("2019-01-01T00:00:00Z")))
+
+    def test_reopened_since_ignores_a_pr_state_only_line_with_no_duration(self):
+        records = [{"item": "a", "sha": "s", "state": BLOCKED, "ts": "2020-01-01T00:00:00Z"}]
+        self.assertFalse(ledger.reopened_since(records, ledger.epoch("2026-08-29T00:00:00Z")))
+
 
 if __name__ == "__main__":
     unittest.main()

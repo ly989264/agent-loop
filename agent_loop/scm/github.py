@@ -85,10 +85,14 @@ class GitHubPublisher(Publisher):
         return "" if code == 0 else output.strip()[-800:]
 
     def is_open(self, root: Path, url: str) -> Optional[bool]:
+        state = self.state(root, url)
+        return None if state is None else state == "OPEN"
+
+    def state(self, root: Path, url: str) -> Optional[str]:
         code, output = run(["gh", "pr", "view", url, "--json", "state"], cwd=root)
         if code != 0:
             return None
         try:
-            return json.loads(output or "{}").get("state") == "OPEN"
+            return json.loads(output or "{}").get("state")
         except ValueError:
             return None

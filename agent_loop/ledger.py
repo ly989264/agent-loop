@@ -2,13 +2,15 @@
 
 from __future__ import annotations
 
+import calendar
 import datetime
 import json
 import subprocess
+import time
 from pathlib import Path
 from typing import Any, Dict, List, Mapping, Optional, Sequence, Set
 
-from .states import BLOCKED
+from .states import BLOCKED, PR_READY
 
 FIELDS = (
     "ts",
@@ -23,6 +25,9 @@ FIELDS = (
     "pr_url",
     "decision",
     "review_posted",
+    "diff_stat",
+    "pr_state",
+    "notified_at",
 )
 
 
@@ -116,6 +121,66 @@ def drift(records: Sequence[Dict[str, Any]], versions: Mapping[str, str]) -> Opt
         if previous.get(name) != versions.get(name)
     ]
     return "tool versions changed since the previous round: " + "; ".join(changes)
+
+
+def epoch(ts: Any) -> float:
+    """A ledger timestamp as epoch seconds; one that cannot be read never expires."""
+    try:
+        return calendar.timegm(time.strptime(str(ts), "%Y-%m-%dT%H:%M:%SZ"))
+    except (TypeError, ValueError):
+        return float("inf")
+
+
+def open_pull_requests(records: Sequence[Dict[str, Any]]) -> Dict[str, Dict[str, Any]]:
+    """item -> its latest pr-bearing record, for those the ledger still shows open.
+
+    A record's own ``pr_state``, when present, is the newest word on it; a
+    PR_READY round with none yet is assumed open until a later record - this
+    round's own merge, or a trigger poll's observation - says otherwise.
+    """
+    latest: Dict[str, Dict[str, Any]] = {}
+    for record in records:
+        item = record.get("item")
+        if item and record.get("pr_url"):
+            latest[item] = record
+    return {
+        item: record for item, record in latest.items()
+        if (record.get("pr_state") or ("OPEN" if record.get("state") == "PR_READY" else None))
+        == "OPEN"
+    }
+
+
+def reopened_since(records: Sequence[Dict[str, Any]], backlog_mtime: float) -> bool:
+    """Whether any item's latest round is BLOCKED from before the backlog's mtime.
+
+    A ``pr_state``-only line carries no ``duration_s`` and is not a round, so it
+    is not "latest" for this question even when it is the newest line for the
+    item.
+    """
+    latest: Dict[str, Dict[str, Any]] = {}
+    for record in records:
+        item = record.get("item")
+        if item and record.get("duration_s") is not None:
+            latest[item] = record
+    return any(
+        record.get("state") == BLOCKED and epoch(record.get("ts")) < backlog_mtime
+        for record in latest.values()
+    )
+
+
+def note_pr_state(path: Path, *, item: str, sha: str, pr_url: str, pr_state: str) -> Dict[str, Any]:
+    """Record what a trigger poll observed about a pull request, without a round.
+
+    ``state`` stays PR_READY - the same value the round that opened it already
+    wrote - so a reader that only knows the four terminal states sees nothing
+    new; ``duration_s`` stays absent, which is what tells a round apart from
+    this note.
+    """
+    return append(path, {
+        "ts": now(), "item": item, "sha": sha, "state": PR_READY,
+        "reason": "trigger poll observed pull request state %s" % pr_state,
+        "pr_url": pr_url, "pr_state": pr_state,
+    })
 
 
 def _version(argv: Sequence[str]) -> str:
