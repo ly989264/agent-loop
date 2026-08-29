@@ -11,10 +11,7 @@ class EnvironmentTest(unittest.TestCase):
             "AWS_SECRET_ACCESS_KEY": "x",
             "AZURE_CLIENT_SECRET": "x",
             "GOOGLE_APPLICATION_CREDENTIALS": "x",
-            "VALKEY_REAL_OPT_IN": "1",
-            "MILESTONE_LEASE_ID": "x",
             "ACTIONS_ID_TOKEN_REQUEST_URL": "x",
-            "VSLAB_M2_RUN_ID": "x",
             "SSH_AUTH_SOCK": "/tmp/agent.sock",
             "PATH": "/usr/bin",
         }
@@ -36,6 +33,12 @@ class EnvironmentTest(unittest.TestCase):
         for prefix in BLOCKED_PREFIXES:
             self.assertTrue(is_blocked(prefix + "ANYTHING"))
         self.assertFalse(is_blocked("HOME"))
+
+    def test_no_consumer_variable_name_is_in_the_kernel_blocklist(self):
+        # Invariant 1: the kernel is generic. Forge and cloud names only.
+        self.assertNotIn("VALKEY_REAL_", BLOCKED_PREFIXES)
+        self.assertNotIn("VSLAB_M2_", BLOCKED_PREFIXES)
+        self.assertNotIn("MILESTONE_LEASE_", BLOCKED_PREFIXES)
 
 
 if __name__ == "__main__":
