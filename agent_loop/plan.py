@@ -33,6 +33,10 @@ from .states import INFRA
 
 PROBE_TAIL_BYTES = 800
 PROPOSALS_FILE = "proposals.yaml"
+# A block sequence entry, which no comment line can be: `#` is not `-`.
+ITEM_ENTRY = re.compile(r"^([ \t]*)-[ \t]", re.MULTILINE)
+# `items: []` - the empty backlog L3 exists to bootstrap.
+EMPTY_FLOW = re.compile(r"^([ \t]*)items:[ \t]*\[[ \t]*\][ \t]*$", re.MULTILINE)
 
 
 @dataclass(frozen=True)
@@ -140,14 +144,31 @@ def append_items(path: Path, proposals: Sequence[Mapping[str, Any]]) -> Tuple[st
     Appended as text rather than re-dumped, so every entry already there and
     every comment survives byte for byte.  The dash column is read off the
     entries already in the file, because one block sequence's entries must all
-    share one.
+    share one - and a `# - ...` comment is not one of them.  A backlog with no
+    entries at all is the bootstrap case and is handled below; any other shape
+    is refused rather than written into.
     """
     if not proposals:
         return ()
     path = Path(path)
     text = path.read_text(encoding="utf-8")
-    match = re.search(r"^(\s*)-\s", text, re.MULTILINE)
-    indent = match.group(1) if match else "  "
+    empty = EMPTY_FLOW.search(text)
+    entry = None if empty else ITEM_ENTRY.search(text)
+    if empty is not None:
+        # `items: []` is a *flow* sequence: an indented `- ` after it is not a
+        # continuation of it but a syntax error, and the file would then never
+        # load again.  So the key is turned into a block sequence first.  This
+        # is the empty backlog L3 exists to bootstrap.
+        text = text[: empty.start()] + empty.group(1) + "items:" + text[empty.end():]
+        indent = empty.group(1) + "  "
+        path.write_text(text, encoding="utf-8")
+    elif entry is not None:
+        indent = entry.group(1)
+    else:
+        raise ConfigError(
+            "%s has neither a block sequence under 'items' nor an empty 'items: []' "
+            "to append to; nothing was written" % path
+        )
     block = ""
     for proposal in proposals:
         dumped = yaml.safe_dump(
@@ -200,11 +221,16 @@ def run_plan(config_path: Path) -> PlanOutcome:
     # was watched, not the planner's word for it.  Below L3 proposals.yaml is
     # the whole of admission and the backlog is a person's to edit.
     appended = ()
+    note = ""
     if config.level(PLANNER) == "L3":
-        appended = append_items(config.backlog, admitted)
+        try:
+            appended = append_items(config.backlog, admitted)
+        except (ConfigError, OSError) as exc:
+            note = "; not appended: %s" % exc
+    if appended:
+        note = "; appended to %s: %s" % (config.backlog, ", ".join(appended))
     reason = "%d admitted, %d rejected; %s%s" % (
-        len(admitted), len(judged) - len(admitted), path,
-        "; appended to %s: %s" % (config.backlog, ", ".join(appended)) if appended else "",
+        len(admitted), len(judged) - len(admitted), path, note,
     )
     notify.fyi(config, "plan: " + reason)
     return PlanOutcome(

@@ -200,12 +200,14 @@ class PlanTest(unittest.TestCase):
 
     # ---- L3 ------------------------------------------------------------
 
-    def test_l3_appends_admitted_items_to_a_backlog_the_loader_re_reads(self):
-        self.rewrite_config()
+    def enable_l3(self):
         self.config_path.write_text(
             self.config_path.read_text().replace(
                 "levels:\n  hermetic: L1", "levels:\n  hermetic: L1\n  planner: L3"),
             encoding="utf-8")
+
+    def test_l3_appends_admitted_items_to_a_backlog_the_loader_re_reads(self):
+        self.enable_l3()
         backlog_path = self.root / ".agent-loop" / "backlog.yaml"
         before = backlog_path.read_text()
         self.reply(
@@ -231,11 +233,38 @@ class PlanTest(unittest.TestCase):
         # the rejected one is not in the backlog at any level
         self.assertNotIn("rejected-one", [item.id for item in items])
 
+    def test_l3_bootstraps_an_empty_backlog_past_its_flow_sequence(self):
+        # `items: []` is a flow sequence: an indented `- ` written after it is
+        # a syntax error, not a continuation, and the file would never load
+        # again - which is the one case L3 exists for, an empty backlog.
+        self.enable_l3()
+        backlog_path = self.root / ".agent-loop" / "backlog.yaml"
+        backlog_path.write_text(
+            "# a backlog with nothing in it yet\n"
+            "# - this comment is not a sequence entry\n"
+            "items: []\n", encoding="utf-8")
+        self.reply(dict(PROPOSAL, probe="exit 7"))
+        outcome, _ = self.run_plan()
+        self.assertEqual(outcome.appended, ("a-proposed-item",))
+        text = backlog_path.read_text()
+        self.assertIn("# - this comment is not a sequence entry", text)
+        items = backlog.load(backlog_path)
+        self.assertEqual([item.id for item in items], ["a-proposed-item"])
+
+    def test_l3_refuses_a_backlog_shape_it_cannot_append_to(self):
+        self.enable_l3()
+        backlog_path = self.root / ".agent-loop" / "backlog.yaml"
+        flow = ("items: [{id: only, group: g, statement: s, cost_class: hermetic, "
+                "selectable: true, sites: [], design_doc: ''}]\n")
+        backlog_path.write_text(flow, encoding="utf-8")
+        self.reply(dict(PROPOSAL, probe="exit 7"))
+        outcome, output = self.run_plan()
+        self.assertEqual((outcome.admitted, outcome.appended), (1, ()))
+        self.assertIn("not appended", output)
+        self.assertEqual(backlog_path.read_text(), flow)
+
     def test_l3_appends_nothing_when_nothing_was_admitted(self):
-        self.config_path.write_text(
-            self.config_path.read_text().replace(
-                "levels:\n  hermetic: L1", "levels:\n  hermetic: L1\n  planner: L3"),
-            encoding="utf-8")
+        self.enable_l3()
         backlog_path = self.root / ".agent-loop" / "backlog.yaml"
         before = backlog_path.read_text()
         self.reply(dict(PROPOSAL, probe="exit 0"))
