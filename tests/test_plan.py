@@ -12,7 +12,7 @@ from contextlib import redirect_stdout
 
 import yaml
 
-from agent_loop import ledger, plan
+from agent_loop import backlog, ledger, plan
 from agent_loop.cli import main
 
 from support import CONFIG, cleanup, make_repo, write_script
@@ -197,6 +197,51 @@ class PlanTest(unittest.TestCase):
         outcome, _ = self.run_plan()
         self.assertEqual(outcome.admitted, 1)
         self.assertEqual((self.root / ".agent-loop" / "backlog.yaml").read_text(), before)
+
+    # ---- L3 ------------------------------------------------------------
+
+    def test_l3_appends_admitted_items_to_a_backlog_the_loader_re_reads(self):
+        self.rewrite_config()
+        self.config_path.write_text(
+            self.config_path.read_text().replace(
+                "levels:\n  hermetic: L1", "levels:\n  hermetic: L1\n  planner: L3"),
+            encoding="utf-8")
+        backlog_path = self.root / ".agent-loop" / "backlog.yaml"
+        before = backlog_path.read_text()
+        self.reply(
+            dict(PROPOSAL, probe="exit 7"),
+            dict(PROPOSAL, id="rejected-one", statement="closed already", probe="exit 0"),
+        )
+        outcome, output = self.run_plan()
+        self.assertEqual(outcome.appended, ("a-proposed-item",))
+        self.assertIn("appended to", output)
+        # every existing entry survives byte for byte, and the file still loads
+        after = backlog_path.read_text()
+        self.assertTrue(after.startswith(before))
+        items = backlog.load(backlog_path)
+        self.assertEqual([item.id for item in items][-1], "a-proposed-item")
+        appended = items[-1]
+        self.assertEqual(appended.statement, PROPOSAL["statement"])
+        self.assertEqual(appended.cost_class, "hermetic")
+        self.assertEqual(appended.probe, "exit 7")
+        self.assertEqual(appended.proof, PROPOSAL["proof"])
+        self.assertEqual(appended.sites, ("project/src/thing.py:3",))
+        self.assertTrue(appended.selectable)
+        self.assertIn("probe observed exit 7", appended.notes)
+        # the rejected one is not in the backlog at any level
+        self.assertNotIn("rejected-one", [item.id for item in items])
+
+    def test_l3_appends_nothing_when_nothing_was_admitted(self):
+        self.config_path.write_text(
+            self.config_path.read_text().replace(
+                "levels:\n  hermetic: L1", "levels:\n  hermetic: L1\n  planner: L3"),
+            encoding="utf-8")
+        backlog_path = self.root / ".agent-loop" / "backlog.yaml"
+        before = backlog_path.read_text()
+        self.reply(dict(PROPOSAL, probe="exit 0"))
+        outcome, _ = self.run_plan()
+        self.assertEqual((outcome.admitted, outcome.appended), (0, ()))
+        self.assertEqual(backlog_path.read_text(), before)
 
     def test_the_cli_exposes_plan_and_its_exit_codes(self):
         self.reply(PROPOSAL)

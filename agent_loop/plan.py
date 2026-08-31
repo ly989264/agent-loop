@@ -15,9 +15,10 @@ watched fail is not evidence; what the kernel watched fail is.
 
 from __future__ import annotations
 
+import re
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Dict, List, Mapping, Optional, Sequence
+from typing import Any, Dict, List, Mapping, Optional, Sequence, Tuple
 
 import yaml
 
@@ -41,6 +42,7 @@ class PlanOutcome:
     rejected: int
     reason: str
     proposals_path: Optional[Path] = None
+    appended: Tuple[str, ...] = ()
 
 
 def _normalise(statement: Any) -> str:
@@ -110,6 +112,55 @@ def write_proposals(path: Path, judged: Sequence[Mapping[str, Any]]) -> Path:
     return path
 
 
+def _backlog_entry(proposal: Mapping[str, Any]) -> Dict[str, Any]:
+    """One admitted proposal as a backlog item the reader already understands.
+
+    ``notes`` carries the planner's rationale and the exit the kernel observed;
+    no new backlog field exists for either.
+    """
+    observed = proposal.get("probe_observed") or {}
+    return {
+        "id": proposal.get("id"),
+        "group": "planner",
+        "statement": proposal.get("statement"),
+        "cost_class": proposal.get("cost_class"),
+        "selectable": True,
+        "sites": list(proposal.get("sites") or []),
+        "design_doc": "",
+        "probe": proposal.get("probe"),
+        "proof": proposal.get("proof"),
+        "notes": "proposed by the planner: %s (probe observed exit %s)"
+        % (proposal.get("rationale"), observed.get("exit_code")),
+    }
+
+
+def append_items(path: Path, proposals: Sequence[Mapping[str, Any]]) -> Tuple[str, ...]:
+    """L3 only: add admitted proposals to the consumer's own backlog.
+
+    Appended as text rather than re-dumped, so every entry already there and
+    every comment survives byte for byte.  The dash column is read off the
+    entries already in the file, because one block sequence's entries must all
+    share one.
+    """
+    if not proposals:
+        return ()
+    path = Path(path)
+    text = path.read_text(encoding="utf-8")
+    match = re.search(r"^(\s*)-\s", text, re.MULTILINE)
+    indent = match.group(1) if match else "  "
+    block = ""
+    for proposal in proposals:
+        dumped = yaml.safe_dump(
+            _backlog_entry(proposal), default_flow_style=False, sort_keys=True,
+            allow_unicode=True,
+        ).splitlines()
+        block += indent + "- " + dumped[0] + "\n"
+        block += "".join(indent + "  " + line + "\n" for line in dumped[1:])
+    with path.open("a", encoding="utf-8") as handle:
+        handle.write(("" if text.endswith("\n") else "\n") + block)
+    return tuple(str(proposal.get("id")) for proposal in proposals)
+
+
 def run_plan(config_path: Path) -> PlanOutcome:
     try:
         config = config_module.load(config_path)
@@ -144,6 +195,18 @@ def run_plan(config_path: Path) -> PlanOutcome:
     judged = admit(config, items, (result.json or {}).get("proposals") or [])
     path = write_proposals(config.worktree_root / PROPOSALS_FILE, judged)
     admitted = [entry for entry in judged if entry.get("admitted")]
-    reason = "%d admitted, %d rejected; %s" % (len(admitted), len(judged) - len(admitted), path)
+    # ROADMAP.md §3: L3 is "the loop also admits backlog items it observed,
+    # each with a probe it watched fail" - and it is the probe run above that
+    # was watched, not the planner's word for it.  Below L3 proposals.yaml is
+    # the whole of admission and the backlog is a person's to edit.
+    appended = ()
+    if config.level(PLANNER) == "L3":
+        appended = append_items(config.backlog, admitted)
+    reason = "%d admitted, %d rejected; %s%s" % (
+        len(admitted), len(judged) - len(admitted), path,
+        "; appended to %s: %s" % (config.backlog, ", ".join(appended)) if appended else "",
+    )
     notify.fyi(config, "plan: " + reason)
-    return PlanOutcome(True, len(admitted), len(judged) - len(admitted), reason, path)
+    return PlanOutcome(
+        True, len(admitted), len(judged) - len(admitted), reason, path, appended
+    )
