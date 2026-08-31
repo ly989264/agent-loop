@@ -6,10 +6,10 @@ a throwaway worktree, verifies the result, writes one ledger line and sends one
 notification. The kernel is generic; every project-specific fact lives in the
 consumer's `.agent-loop/config.yaml` and `.agent-loop/backlog.yaml`.
 
-This is Stage 4b of the exploration-loop roadmap: modes `continuous`,
-`schedule` and `until` around the `once` round from Stage 2, back-pressure,
-pause/resume, and ledger-only metrics. Autonomy levels are L1 and L2 (Stage
-3), no Docker handling.
+This is Stage 5b of the exploration-loop roadmap: the `plan` command and the L3
+planner role on top of Stage 4b's modes, back-pressure, pause/resume and
+ledger-only metrics. Autonomy levels are L1 and L2 for a cost class (Stage 3)
+and L3 for the planner, enabled on no consumer; no Docker handling.
 
 ## The round
 
@@ -126,6 +126,29 @@ line already carries, against every other pull request); the median time from
 a round's terminal state to its notification (`ts` vs. the same line's
 `notified_at`); and cost per merged pull request.
 
+## Planning
+
+```bash
+agent-loop plan --config <consumer>/.agent-loop/config.yaml
+```
+
+The planner role reads consumer data only — the backlog's ids, statements and
+cost classes, the ledger's last 20 lines, and the files any `plan_sources`
+globs name (8 KB each, marked when cut) — and proposes at most five backlog
+items of `{id, statement, cost_class, sites, probe, proof, rationale}`, through
+the same adapter path every other role uses: stripped environment, a bounded
+bundle that refuses rather than truncates, one repair on a malformed answer.
+Admission is invariant 2 and nothing else: the kernel runs each proposal's
+probe itself, from the cost class's own verify `cwd`, and a probe that exits 0
+is **rejected** — a proposal whose id or statement is already in the backlog is
+rejected as a duplicate before its probe is even spent. Everything judged,
+admitted and rejected alike, is written to `<worktree_root>/proposals.yaml`
+with the exit code and output tail behind each verdict, and one `FYI` says how
+many of each. A plan run is not a round — no item, no sha, none of the four
+terminal states — so it writes no ledger line; `proposals.yaml` is its record.
+Only `levels: {planner: L3}` also appends the admitted ones to
+`backlog.yaml` itself.
+
 ## Config keys
 
 `examples/valkey_scale_lab.config.yaml` is a filled-in example. Every path is
@@ -144,7 +167,8 @@ rather than ignored.
 | `agents` | per role (`planner`/`worker`/`reviewer`/`diagnoser`): `adapter[:model]`, a list being an escalation ladder |
 | `caps` | per role: `wall_s`, `silence_s`, `max_tokens`; plus five continuous-mode keys keyed by name, not role: `poll_s` (default 30), `idle_s` (900), `open_prs` (3), `non_progress_rounds` (5), `round_wall_s` (3600) |
 | `notify` | `stdout`, `macos`, or `{target: file, path: ...}` |
-| `levels` | per cost class; `L1` (a person merges) or `L2` (the loop may merge) |
+| `levels` | per cost class; `L1` (a person merges) or `L2` (the loop may merge). `planner` is the one reserved key and is not a cost class: `L3` there lets `agent-loop plan` append admitted proposals to the backlog |
+| `plan_sources` | file globs `agent-loop plan` reads into the planner's bundle, read-only; absent means the backlog and ledger alone |
 | `scm` | `github` (push, open or update the PR, one review comment, squash-merge) or `local-only` (the default: no forge) |
 
 A cost class with no `verify` entry cannot be verified, so a round that picks an
