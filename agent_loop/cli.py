@@ -9,7 +9,7 @@ import sys
 from pathlib import Path
 from typing import List, Optional
 
-from . import backlog, config as config_module, ledger, modes, round as round_module
+from . import backlog, config as config_module, ledger, modes, plan as plan_module, round as round_module
 from .errors import ConfigError
 from .states import BLOCKED, INFRA, NO_ITEM, PR_READY
 
@@ -96,6 +96,10 @@ def main(argv: Optional[List[str]] = None) -> int:
     resume_parser = subparsers.add_parser("resume", help="undo pause")
     resume_parser.add_argument("--config", required=True, type=Path)
 
+    plan_parser = subparsers.add_parser(
+        "plan", help="ask the planner role for backlog proposals and admit them")
+    plan_parser.add_argument("--config", required=True, type=Path)
+
     metrics_parser = subparsers.add_parser("metrics", help="ledger-derived numbers, text only")
     metrics_parser.add_argument("--config", required=True, type=Path)
 
@@ -108,6 +112,11 @@ def main(argv: Optional[List[str]] = None) -> int:
         return _pause(arguments.config, False)
     if arguments.command == "metrics":
         return _metrics(arguments.config)
+    if arguments.command == "plan":
+        # A plan run is not a round, so it has no terminal state and no exit
+        # code of one: 0 when the planner answered and admission ran, 2 when it
+        # could not - which is what INFRA already means to a caller.
+        return 0 if plan_module.run_plan(arguments.config).ok else 2
 
     # `schedule` needs nothing `once` does not already do - one round, exit
     # code says which of the four states - so it runs the same path.
