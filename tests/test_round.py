@@ -170,9 +170,13 @@ class RoundTest(unittest.TestCase):
                                universal_newlines=True).stdout
         self.assertIn("agent-loop: an-item", shown)
         self.assertIn("project/fixed.txt", shown)
+        # A second round on the item cannot make a second copy of that branch.
+        # It is BLOCKED, not INFRA: nothing about the machine failed, and only
+        # BLOCKED is skipped at this sha, so the loop can reach a later item.
         again = self.run_once(config_path)
-        self.assertEqual(again.state, INFRA)
+        self.assertEqual(again.state, BLOCKED)
         self.assertIn("explore/an-item", again.reason)
+        self.assertIn("merge or delete it", again.reason)
 
     def test_a_commit_that_fails_is_infra_with_the_cost_and_keeps_the_diff(self):
         # A repository hook (or commit.gpgsign) can refuse the commit that puts

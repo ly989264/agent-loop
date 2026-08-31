@@ -209,8 +209,8 @@ class DrillCase(unittest.TestCase):
 
 class RepeatDispatchDrill(DrillCase):
     """Drill 1 - running `run --mode once` again on an unchanged tree after a
-    PR_READY dispatches nothing: no second notification for the same
-    (item, state, sha), no second commit, no second branch.
+    PR_READY dispatches nothing: no second worker, no second commit, no second
+    branch, and no second notification for the same (item, state, sha).
 
     Watched to fail with `ledger.already_notified` returning False.
     """
@@ -227,18 +227,36 @@ class RepeatDispatchDrill(DrillCase):
 
         second_code, _ = self.once()
         third_code, _ = self.once()
-        # the branch this item's diff is already on is what stops the repeat
-        self.assertEqual((second_code, third_code), (2, 2))
-        self.assertEqual(self.states(), [PR_READY, INFRA, INFRA])
+        # The branch this item's diff is already on is what stops the repeat,
+        # and it stops it as BLOCKED - a person has to take the branch. The
+        # third run then finds that item skipped at this sha and, this consumer
+        # having only the one, ends NO_ITEM instead of asking again for ever.
+        self.assertEqual((second_code, third_code), (1, 0))
+        self.assertEqual(self.states(), [PR_READY, BLOCKED, NO_ITEM])
         self.assertIn("explore/an-item", self.records()[1]["reason"])
 
-        # one INFRA notification for the pair: (item, state, sha) is the same
-        self.assertEqual(len(self.notifications()), 2)
-        self.assertFalse(self.records()[2].get("notified_at"))
+        self.assertEqual(len(self.notifications()), 3)
         self.assertEqual([name for name in self.branches() if name.startswith("explore/")],
                          ["explore/an-item"])
         self.assertEqual(self.git("rev-list", "--count", "explore/an-item").strip(), commits)
         self.assertEqual(self.worktree_root_entries(), [])
+
+    def test_the_item_after_a_kept_branch_is_still_reached(self):
+        """The reason drill 1's second run is BLOCKED and not INFRA: with two
+        open items, the loop must get to the second one.
+
+        Watched to fail with the kept-branch check removed from `_worker_round`:
+        run 2 is INFRA on `git worktree add`'s "a branch named ... already
+        exists", INFRA is not skipped at this sha, and run 3 picks `an-item`
+        again - `another-item` is never dispatched at all.
+        """
+        self.consumer(answering(FIXING_AGENT, DONE), backlog=TWO_ITEMS)
+        self.assertEqual(self.once()[0], 0)
+        self.once()
+        self.once()
+        self.assertEqual(self.states(), [PR_READY, BLOCKED, BLOCKED])
+        self.assertEqual([record["item"] for record in self.records()],
+                         ["an-item", "an-item", "another-item"])
 
 
 class MalformedWorkerDrill(DrillCase):

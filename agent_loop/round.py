@@ -24,7 +24,7 @@ from .context import ContextTooLarge
 from .errors import ConfigError, InfraError
 from .schemas import REVIEWER_OUTPUT_SCHEMA, WORKER_OUTPUT_SCHEMA
 from .states import BLOCKED, INFRA, NO_ITEM, PR_READY
-from .worktree import Workspace, commit_all, head_sha, workspace
+from .worktree import EXPLORE_PREFIX, Workspace, branch_exists, commit_all, head_sha, workspace
 
 
 @dataclass(frozen=True)
@@ -207,6 +207,23 @@ def _worker_round(
     config: Config, records: Sequence[Dict[str, Any]], selection: pick.Selection, sha: str
 ) -> Result:
     item = selection.item
+    kept = EXPLORE_PREFIX + item.id
+    if branch_exists(config.root, kept):
+        # A previous round on this item left its result on that branch and
+        # nothing has taken custody of it - at L1 the merge is a person's, and
+        # under `scm: local-only` the branch is the whole deliverable, so it is
+        # never deleted.  `git worktree add -b` would then fail, and reporting a
+        # raw git error as INFRA is wrong twice over: nothing about the machine
+        # failed, and INFRA is not skipped at this sha, so pick - which takes the
+        # first failing probe in file order - chooses the same item every round
+        # and no later item is ever reached.  BLOCKED is what this is: the round
+        # cannot proceed until a person acts, it says what they must do, and
+        # ledger.blocked_at lets the next round move on to the next item.
+        return Result(
+            BLOCKED,
+            "%s already holds a previous round's result; merge or delete it "
+            "before this item is run again" % kept,
+        )
     with workspace(config.root, config.branch, config.worktree_root, item.id) as space:
         bundle = context.build_worker_bundle(
             item=item,

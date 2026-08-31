@@ -18,7 +18,9 @@ pause/resume, and ledger-only metrics. Autonomy levels are L1 and L2 (Stage
               priority); choose the first failing one; skip items recorded
               BLOCKED at the current sha        no failing probe -> NO_ITEM
 2  worktree   git worktree add -b explore/<item-id>
-              <worktree_root>/<item-id> <branch>
+              <worktree_root>/<item-id> <branch>; an explore/<item-id> a
+              previous round left behind is a result nobody has taken yet, so
+              the round says so and stops       -> BLOCKED
 3  worker     stripped environment, bounded bundle (backlog entry, probe output,
               cited site excerpts, design-doc section, output schema); exactly
               one repair round-trip on a malformed answer

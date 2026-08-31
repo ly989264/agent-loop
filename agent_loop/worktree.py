@@ -55,6 +55,12 @@ def head_sha(repo_root: Path, branch: str) -> str:
     return result.stdout.strip()
 
 
+def branch_exists(repo_root: Path, branch: str) -> bool:
+    """Whether ``branch`` is already a local head in this repository."""
+    result = _git(["rev-parse", "--verify", "--quiet", "refs/heads/" + branch], repo_root)
+    return result.returncode == 0
+
+
 def worktrees_under(repo_root: Path, worktree_root: Path) -> Tuple[str, ...]:
     """Registered worktrees living under this round's worktree root.
 
