@@ -30,9 +30,14 @@ KEYS = frozenset(
         "notify",
         "levels",
         "scm",
+        "plan_sources",
     }
 )
 ROLES = ("planner", "worker", "reviewer", "diagnoser")
+# `levels` is keyed by cost class, and the planner is not one: it is a role.
+# L3 is that role's level - ROADMAP.md §3 "the loop also admits backlog items" -
+# so it lives under this reserved key, which no cost class may use.
+PLANNER = "planner"
 # Continuous-mode caps that live beside the per-role budgets in `caps`, keyed by
 # name instead of role so a typo'd role name still trips "unknown role", not a
 # silently-ignored cap.
@@ -98,6 +103,8 @@ class Config:
     notify: Tuple[NotifyTarget, ...]
     levels: Mapping[str, str] = field(default_factory=dict)
     scm: str = scm_module.DEFAULT
+    # File globs `agent-loop plan` may read into the planner's bundle, read-only.
+    plan_sources: Tuple[str, ...] = ()
     # Continuous mode; §3 "Modes and back-pressure". Defaults in CAP_DEFAULTS.
     open_prs: int = CAP_DEFAULTS["open_prs"]
     non_progress_rounds: int = CAP_DEFAULTS["non_progress_rounds"]
@@ -238,8 +245,19 @@ def load(path: os.PathLike) -> Config:
     for cost_class, level in levels_document.items():
         if level not in {"L1", "L2", "L3"}:
             raise ConfigError("levels.%s must be L1, L2 or L3" % cost_class)
-        if level == "L3":
-            raise ConfigError("levels.%s is L3; only L1 and L2 are implemented" % cost_class)
+        if level == "L3" and cost_class != PLANNER:
+            raise ConfigError(
+                "levels.%s is L3; L3 is levels.%s, and only L1 and L2 are implemented "
+                "for a cost class" % (cost_class, PLANNER)
+            )
+    if levels_document.get(PLANNER) == "L2":
+        raise ConfigError("levels.%s must be L1 or L3; %s is not a cost class" % (PLANNER, PLANNER))
+
+    plan_sources = document.get("plan_sources", [])
+    if not isinstance(plan_sources, list) or not all(
+        isinstance(pattern, str) for pattern in plan_sources
+    ):
+        raise ConfigError("plan_sources must be a list of file globs")
 
     return Config(
         root=root,
@@ -254,6 +272,7 @@ def load(path: os.PathLike) -> Config:
         notify=tuple(_notify_target(target) for target in notify_document),
         levels=dict(levels_document),
         scm=str(publisher),
+        plan_sources=tuple(plan_sources),
         open_prs=cap_ints["open_prs"],
         non_progress_rounds=cap_ints["non_progress_rounds"],
         poll_s=cap_ints["poll_s"],

@@ -56,6 +56,26 @@ class ConfigTest(unittest.TestCase):
             self.load(CONFIG.replace("hermetic: L1", "hermetic: L3"))
         self.assertIn("only L1 and L2", str(caught.exception))
 
+    def test_l3_is_the_planners_level_and_no_cost_class_may_take_it(self):
+        # `levels` is keyed by cost class; `planner` is the one reserved key,
+        # because L3 is a role's autonomy and not a class of work.
+        self.assertEqual(self.load(CONFIG).level("planner"), "L1")
+        self.assertEqual(
+            self.load(CONFIG.replace("hermetic: L1", "hermetic: L1\n  planner: L3"))
+                .level("planner"), "L3")
+        with self.assertRaises(ConfigError) as caught:
+            self.load(CONFIG.replace("hermetic: L1", "hermetic: L1\n  planner: L2"))
+        self.assertIn("planner is not a cost class", str(caught.exception).replace("levels.", ""))
+
+    def test_plan_sources_defaults_to_nothing_and_must_be_a_list_of_globs(self):
+        self.assertEqual(self.load(CONFIG).plan_sources, ())
+        self.assertEqual(
+            self.load(CONFIG + "\nplan_sources:\n  - docs/*.md\n  - README.md\n").plan_sources,
+            ("docs/*.md", "README.md"))
+        with self.assertRaises(ConfigError) as caught:
+            self.load(CONFIG + "\nplan_sources: docs/*.md\n")
+        self.assertIn("plan_sources", str(caught.exception))
+
     def test_the_publisher_defaults_to_local_only_and_an_unknown_one_is_refused(self):
         self.assertEqual(self.load(CONFIG).scm, "local-only")
         self.assertEqual(self.load(CONFIG + "\nscm: github\n").scm, "github")
