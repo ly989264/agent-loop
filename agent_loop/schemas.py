@@ -23,6 +23,40 @@ WORKER_OUTPUT_SCHEMA = {
     },
 }
 
+# ROADMAP.md §4 Stage 5: the planner proposes backlog items.  ``probe`` and
+# ``proof`` are required because invariant 2 admits nothing without them, and
+# the count is capped in the schema itself so an over-long answer is malformed -
+# it takes the existing one-repair path instead of needing a rule of its own.
+MAX_PROPOSALS = 5
+
+PLANNER_OUTPUT_SCHEMA = {
+    "type": "object",
+    "additionalProperties": False,
+    "required": ["proposals"],
+    "properties": {
+        "proposals": {
+            "type": "array",
+            "maxItems": MAX_PROPOSALS,
+            "items": {
+                "type": "object",
+                "additionalProperties": False,
+                "required": [
+                    "id", "statement", "cost_class", "sites", "probe", "proof", "rationale",
+                ],
+                "properties": {
+                    "id": {"type": "string"},
+                    "statement": {"type": "string"},
+                    "cost_class": {"type": "string"},
+                    "sites": {"type": "array", "items": {"type": "string"}},
+                    "probe": {"type": "string"},
+                    "proof": {"type": "string"},
+                    "rationale": {"type": "string"},
+                },
+            },
+        }
+    },
+}
+
 REVIEWER_OUTPUT_SCHEMA = {
     "type": "object",
     "additionalProperties": False,
@@ -73,6 +107,9 @@ def validate(schema, value, path="output"):
     if expected == "array":
         if not isinstance(value, list):
             return "%s is not an array" % path
+        limit = schema.get("maxItems")
+        if limit is not None and len(value) > limit:
+            return "%s has %d items, above the maximum of %d" % (path, len(value), limit)
         for index, element in enumerate(value):
             reason = validate(schema.get("items", {}), element, "%s[%d]" % (path, index))
             if reason is not None:
