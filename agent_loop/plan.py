@@ -31,6 +31,9 @@ from .pick import run_command
 from .schemas import PLANNER_OUTPUT_SCHEMA
 from .states import INFRA
 
+# ROADMAP.md invariant 5: `needs-fleet` items are never selectable, so no round
+# can pick one and the loop never launches a paid or fleet run.
+NEEDS_FLEET = "needs-fleet"
 PROBE_TAIL_BYTES = 800
 PROPOSALS_FILE = "proposals.yaml"
 # A block sequence entry, which no comment line can be: `#` is not `-`.
@@ -120,7 +123,9 @@ def _backlog_entry(proposal: Mapping[str, Any]) -> Dict[str, Any]:
     """One admitted proposal as a backlog item the reader already understands.
 
     ``notes`` carries the planner's rationale and the exit the kernel observed;
-    no new backlog field exists for either.
+    no new backlog field exists for either.  A `needs-fleet` proposal is written
+    unselectable: invariant 5 is the loop's, not the planner's, and admission
+    must not be a way of making one selectable by proposing it.
     """
     observed = proposal.get("probe_observed") or {}
     return {
@@ -128,7 +133,7 @@ def _backlog_entry(proposal: Mapping[str, Any]) -> Dict[str, Any]:
         "group": "planner",
         "statement": proposal.get("statement"),
         "cost_class": proposal.get("cost_class"),
-        "selectable": True,
+        "selectable": proposal.get("cost_class") != NEEDS_FLEET,
         "sites": list(proposal.get("sites") or []),
         "design_doc": "",
         "probe": proposal.get("probe"),

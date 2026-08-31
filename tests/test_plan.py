@@ -263,6 +263,22 @@ class PlanTest(unittest.TestCase):
         self.assertIn("not appended", output)
         self.assertEqual(backlog_path.read_text(), flow)
 
+    def test_a_needs_fleet_proposal_is_appended_unselectable(self):
+        # invariant 5: needs-fleet items are never selectable, so no round can
+        # ever pick one - the loop launches no paid or fleet run.
+        self.enable_l3()
+        self.config_path.write_text(
+            self.config_path.read_text().replace(
+                "verify:\n  hermetic:", "verify:\n  needs-fleet:\n    cwd: project\n"
+                "    command: \"true\"\n  hermetic:"),
+            encoding="utf-8")
+        self.reply(dict(PROPOSAL, cost_class="needs-fleet", probe="exit 7"))
+        outcome, _ = self.run_plan()
+        self.assertEqual(outcome.appended, ("a-proposed-item",))
+        appended = backlog.load(self.root / ".agent-loop" / "backlog.yaml")[-1]
+        self.assertEqual(appended.cost_class, "needs-fleet")
+        self.assertFalse(appended.selectable)
+
     def test_l3_appends_nothing_when_nothing_was_admitted(self):
         self.enable_l3()
         backlog_path = self.root / ".agent-loop" / "backlog.yaml"
