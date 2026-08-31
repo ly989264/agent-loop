@@ -10,12 +10,16 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
-from typing import Any, Dict, Mapping
+from typing import Any, Dict, List, Mapping, Sequence
 
 from .backlog import Item
 
 MAX_CONTEXT_BYTES = 192_000
 EXCERPT_RADIUS_LINES = 20
+# What `agent-loop plan` shows a planner, all of it consumer data.
+PLAN_LEDGER_LINES = 20
+PLAN_SOURCE_BYTES = 8_000
+PLAN_SOURCE_FILES = 40
 
 
 class ContextTooLarge(RuntimeError):
@@ -92,6 +96,83 @@ FINDING_CLASSES = {
         "such hunk is a contract finding and comes back as remove."
     ),
 }
+
+
+# ROADMAP.md invariant 2 and §7's last risk line, told to the planner rather
+# than assumed of it; the kernel enforces every one of them again at admission.
+PLANNING_RULES = (
+    "Propose only items you can name a probe for: a shell command, run from the "
+    "cost class's verify cwd, that exits non-zero while the item is open and 0 "
+    "once it is closed. Run it and see it fail before you propose it - the "
+    "kernel runs it again and rejects a proposal whose probe exits 0. Do not "
+    "propose an item whose id or statement is already in the backlog below. "
+    "Do not propose work that needs a paid or fleet run. A proposal's sites are "
+    "path:line where the item lives today."
+)
+
+
+def plan_excerpts(root: Path, patterns: Sequence[str]) -> List[Dict[str, Any]]:
+    """The consumer-named files a planner may read, each bounded and said to be.
+
+    A glob can name a megabyte of documentation, so each file contributes at
+    most ``PLAN_SOURCE_BYTES`` and carries ``truncated`` when it was cut. That is
+    not the silent shortening ``encode`` refuses: the bundle says what it did.
+    """
+    excerpts: List[Dict[str, Any]] = []
+    for pattern in patterns:
+        try:
+            matches = sorted(root.glob(pattern))
+        except (NotImplementedError, ValueError) as exc:
+            excerpts.append({"pattern": pattern, "absent_reason": "unusable glob: %s" % exc})
+            continue
+        for path in matches:
+            if len(excerpts) >= PLAN_SOURCE_FILES:
+                return excerpts
+            if not path.is_file():
+                continue
+            try:
+                text = path.read_text(encoding="utf-8", errors="replace")
+                name = str(path.resolve().relative_to(root.resolve()))
+            except (OSError, ValueError) as exc:
+                excerpts.append({"pattern": pattern, "absent_reason": "cannot read: %s" % exc})
+                continue
+            excerpts.append({
+                "path": name,
+                "text": text[:PLAN_SOURCE_BYTES],
+                "truncated": len(text) > PLAN_SOURCE_BYTES,
+            })
+    return excerpts
+
+
+def build_planner_bundle(
+    *,
+    items: Sequence[Item],
+    records: Sequence[Mapping[str, Any]],
+    excerpts: Sequence[Mapping[str, Any]],
+    schema: Mapping[str, Any],
+) -> Dict[str, Any]:
+    """What the planner sees: consumer data only - no tree, no diff.
+
+    The backlog is ids, statements and selectable, because that is what a
+    duplicate is judged against; the ledger tail is what the loop has been
+    doing; the excerpts are whatever `plan_sources` named.
+    """
+    return {
+        "schema_version": "agent-loop-bundle-v1",
+        "role": "planner",
+        "backlog": [
+            {"id": item.id, "statement": item.statement, "cost_class": item.cost_class,
+             "selectable": item.selectable}
+            for item in items
+        ],
+        "ledger_tail": [
+            {key: record.get(key) for key in ("ts", "item", "state", "reason")}
+            for record in list(records)[-PLAN_LEDGER_LINES:]
+        ],
+        "sources": [dict(excerpt) for excerpt in excerpts],
+        "planning_rules": PLANNING_RULES,
+        "output_schema": dict(schema),
+    }
 
 
 def build_reviewer_bundle(

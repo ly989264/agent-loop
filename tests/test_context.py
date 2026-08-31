@@ -1,8 +1,11 @@
 import unittest
 
 from agent_loop.backlog import Item
-from agent_loop.context import MAX_CONTEXT_BYTES, ContextTooLarge, build_worker_bundle, encode
-from agent_loop.schemas import WORKER_OUTPUT_SCHEMA
+from agent_loop.context import (
+    MAX_CONTEXT_BYTES, PLAN_SOURCE_BYTES, ContextTooLarge, build_planner_bundle,
+    build_worker_bundle, encode, plan_excerpts,
+)
+from agent_loop.schemas import PLANNER_OUTPUT_SCHEMA, WORKER_OUTPUT_SCHEMA
 
 from support import cleanup, make_repo
 
@@ -76,3 +79,48 @@ class ContextTest(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class PlannerBundleTest(unittest.TestCase):
+    def setUp(self):
+        self.root = make_repo()
+        (self.root / "docs").mkdir()
+        (self.root / "docs" / "one.md").write_text("open question one", encoding="utf-8")
+        (self.root / "docs" / "big.md").write_text("x" * (PLAN_SOURCE_BYTES + 10),
+                                                   encoding="utf-8")
+        (self.root / "docs" / "sub").mkdir()
+
+    def tearDown(self):
+        cleanup(self.root)
+
+    def test_plan_sources_are_read_bounded_and_say_when_they_were_cut(self):
+        excerpts = plan_excerpts(self.root, ["docs/*.md"])
+        self.assertEqual([excerpt["path"] for excerpt in excerpts],
+                         ["docs/big.md", "docs/one.md"])
+        self.assertTrue(excerpts[0]["truncated"])
+        self.assertEqual(len(excerpts[0]["text"]), PLAN_SOURCE_BYTES)
+        self.assertEqual(excerpts[1]["text"], "open question one")
+        self.assertFalse(excerpts[1]["truncated"])
+
+    def test_a_glob_matching_nothing_or_a_directory_contributes_nothing(self):
+        self.assertEqual(plan_excerpts(self.root, ["docs/absent/*.md", "docs/sub"]), [])
+
+    def test_the_bundle_carries_the_backlog_the_ledger_tail_and_the_sources(self):
+        bundle = build_planner_bundle(
+            items=[item()],
+            records=[{"ts": "t", "item": "an-item", "state": "NO_ITEM", "reason": "r",
+                      "cost": 1.0}],
+            excerpts=plan_excerpts(self.root, ["docs/one.md"]),
+            schema=PLANNER_OUTPUT_SCHEMA)
+        self.assertEqual(bundle["role"], "planner")
+        self.assertEqual(bundle["backlog"],
+                         [{"id": "an-item", "statement": "a statement",
+                           "cost_class": "hermetic", "selectable": True}])
+        # the ledger tail is four named fields, not whatever a round wrote
+        self.assertEqual(sorted(bundle["ledger_tail"][0]), ["item", "reason", "state", "ts"])
+        self.assertEqual(bundle["sources"][0]["path"], "docs/one.md")
+        self.assertIn("exits 0", bundle["planning_rules"])
+        self.assertEqual(bundle["output_schema"], PLANNER_OUTPUT_SCHEMA)
+        # consumer data only: no tree, no diff
+        self.assertNotIn("sites", bundle)
+        self.assertNotIn("diff", bundle)
