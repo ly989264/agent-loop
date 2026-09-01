@@ -170,9 +170,77 @@ rather than ignored.
 | `levels` | per cost class; `L1` (a person merges) or `L2` (the loop may merge). `planner` is the one reserved key and is not a cost class: `L3` there lets `agent-loop plan` append admitted proposals to the backlog |
 | `plan_sources` | file globs `agent-loop plan` reads into the planner's bundle, read-only; absent means the backlog and ledger alone |
 | `scm` | `github` (push, open or update the PR, one review comment, squash-merge) or `local-only` (the default: no forge) |
+| `jail` | optional; `image` (required), `credentials_env` (host variable names forwarded by name), `memory` (e.g. `4g`). Absent means today's behaviour, unchanged — see **The jail** |
 
 A cost class with no `verify` entry cannot be verified, so a round that picks an
 item of that class ends `INFRA` rather than guessing.
+
+## The jail
+
+Environment stripping removes variables, not access. Without a jail a worker's
+`python3` runs with the operator's `HOME` and can read `~/.ssh` and `~/.claude`;
+the `--allowedTools` list bounds the shell, not the filesystem. The optional
+`jail` key replaces that boundary with an OS one.
+
+When it is present, the **worker** role's adapter command and **`agent-loop
+plan`'s probes** run as:
+
+```
+docker run --rm --init --name agent-loop-<id> \
+  --workdir /workspace --volume <tree>:/workspace \
+  --pids-limit 2048 [--memory <memory>] \
+  --env <PINNED>=... [--env <credential name>] \
+  <image> <the command that would have run on the host>
+```
+
+- **One mount, read-write, at `/workspace`**, and it is the working directory:
+  the round's worktree for a worker, the consumer root for a plan run, because
+  that is where each already runs. No host `HOME`, no docker socket, no second
+  mount of any kind.
+- **Environment**: the pinned git and output settings from `environment.py`,
+  plus each name in `credentials_env` passed as `--env NAME` so the value is
+  taken from the loop's own environment and never appears in an argv. The host's
+  `PATH`, `HOME` and `TMPDIR` are *not* forwarded — they name macOS paths that
+  would shadow the image's own toolchain.
+- **The caps still hold.** `docker run` is a client: killing its process group
+  leaves the container running, so a timed-out or killed jailed command is ended
+  with `docker kill <name>` as well. That is why every container is named.
+- **Network is the daemon's default**, because the agent CLI has to reach its
+  API. The jail is a filesystem and process boundary, not a network one.
+
+**What stays host-side**: the verify commands and the backlog's own probes are
+operator-authored data, so they run as before; the reviewer reads a published
+diff read-only. Only what a model wrote or a model runs is jailed.
+
+**The image is data, and the consumer owns it.** The kernel builds no image and
+names none. A `jail.image` must carry the toolchain that consumer's own commands
+need *and* the agent CLI its adapter starts (`claude`, for `claude-code`) — a
+small Dockerfile beside the consumer's `.agent-loop/config.yaml` is the usual
+form. The `codex` adapter refuses a jail rather than silently escaping one: it
+hands the CLI host paths that no mount carries.
+
+**Credentials.** `credentials_env` is the narrowest mechanism that works:
+`ANTHROPIC_API_KEY` or `CLAUDE_CODE_OAUTH_TOKEN` forwarded by name, carrying
+model access and nothing else. Where the host keeps its credential somewhere a
+container cannot be given by name alone — a macOS Keychain item, say — there is
+no acceptable file to mount in its place: the file form of a Claude Code
+credential carries a refresh token, which is account access rather than model
+access. That is an operator decision, not something to work around.
+
+**`--allowedTools` does not widen inside the jail.** The worker's grant is still
+derived from the cost class's verify command and the picked item's probe, and
+nothing else. The jail is the real boundary, so widening would cost nothing in
+principle — but it would cost the defense-in-depth of two independent limits and
+a line of code, and nothing was observed to need it. One consequence is worth
+knowing: a consumer whose verify command reaches into a *different* container
+derives a grant (`Bash(docker:*)`) that means nothing inside the jail, where
+there is no docker. Such a consumer's worker can edit but not build, and the
+remedy is a data one — phrase its commands around the toolchain its jail image
+carries.
+
+**A git worktree's `.git` is a file pointing outside the mount**, so git commands
+inside the jail fail. The round is unaffected: the kernel commits the worker's
+diff onto `explore/<item>` host-side.
 
 ## Adapters
 
@@ -195,4 +263,5 @@ exercised.
 PYTHONPATH=.:tests python3 -m unittest discover -s tests
 ```
 
-Hermetic: no network, no real agent, no Docker.
+Hermetic: no network, no real agent, no Docker — the jail's tests use a fake
+`docker` on `PATH` that records its argv, so no image is pulled.
