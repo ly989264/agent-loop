@@ -22,12 +22,12 @@ from typing import Any, Dict, List, Mapping, Optional, Sequence, Tuple
 
 import yaml
 
-from . import backlog, config as config_module, context, ledger, notify
+from . import backlog, config as config_module, context, jail as jail_module, ledger, notify
 from .adapters import build, invoke_with_one_repair
 from .config import PLANNER, Config
 from .context import ContextTooLarge
 from .errors import ConfigError, InfraError
-from .pick import run_command
+from .pick import PROBE_TIMEOUT_S, run_command
 from .schemas import PLANNER_OUTPUT_SCHEMA
 from .states import INFRA
 
@@ -56,6 +56,21 @@ def _normalise(statement: Any) -> str:
     return " ".join(str(statement or "").split()).casefold()
 
 
+def _run_probe(config: Config, probe: str, cost_class: str) -> Tuple[int, str]:
+    """Run one proposal's probe where that cost class's commands run.
+
+    ROADMAP.md §4 Stage 6: a proposal's probe is model-authored shell the kernel
+    runs to judge it, so it goes in the jail whenever the consumer has one - the
+    backlog's own probes and the verify commands are operator-authored data and
+    stay host-side.  The mount is the consumer root rather than a worktree
+    because that is where a plan run's probes already run.
+    """
+    cwd = config.verify[cost_class].cwd
+    if config.jail is None:
+        return run_command(probe, config.root / cwd)
+    return jail_module.run_command(config.jail, probe, config.root, cwd, PROBE_TIMEOUT_S)
+
+
 def admit(
     config: Config, items: Sequence[backlog.Item], proposals: Sequence[Mapping[str, Any]]
 ) -> List[Dict[str, Any]]:
@@ -79,8 +94,7 @@ def admit(
                 % cost_class,
             )
         else:
-            cwd = config.root / config.verify[cost_class].cwd
-            exit_code, output = run_command(str(proposal.get("probe")), cwd)
+            exit_code, output = _run_probe(config, str(proposal.get("probe")), cost_class)
             record["probe_observed"] = {
                 "exit_code": exit_code,
                 "cwd": config.verify[cost_class].cwd,

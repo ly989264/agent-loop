@@ -9,7 +9,7 @@ import os
 import unittest
 from pathlib import Path
 
-from agent_loop import jail as jail_module, round as round_module
+from agent_loop import config as config_module, jail as jail_module, plan, round as round_module
 from agent_loop.adapters import build
 from agent_loop.config import AgentSpec, Budget
 from agent_loop.environment import PINNED
@@ -272,6 +272,29 @@ class JailedProbeTest(FakeDockerTest):
             ["/workspace/project"],
         )
         self.assertEqual(run[run.index("jail:local") + 1:], ["sh", "-c", "exit 3"])
+
+
+    def test_a_plan_run_probes_a_proposal_inside_the_jail(self):
+        # A proposal's probe is model-authored shell; the backlog's own probes
+        # and verify's commands are the operator's data and stay host-side.
+        (self.root / ".agent-loop" / "config.yaml").write_text(
+            JAIL_CONFIG % "/bin/true", encoding="utf-8")
+        config = config_module.load(self.root / ".agent-loop" / "config.yaml")
+        judged = plan.admit(config, [], [
+            {"id": "proposed", "statement": "s", "cost_class": "hermetic",
+             "probe": "exit 3", "proof": "p", "sites": [], "rationale": "r"}])
+        self.assertEqual(self.recorded()[0][-3:], ["sh", "-c", "exit 3"])
+        self.assertEqual(judged[0]["probe_observed"]["cwd"], "project")
+
+    def test_without_the_key_a_plan_run_probe_stays_host_side(self):
+        (self.root / ".agent-loop" / "config.yaml").write_text(
+            JAIL_CONFIG.replace("jail:\n  image: jail:local\n", "") % "/bin/true",
+            encoding="utf-8")
+        config = config_module.load(self.root / ".agent-loop" / "config.yaml")
+        plan.admit(config, [], [
+            {"id": "proposed", "statement": "s", "cost_class": "hermetic",
+             "probe": "exit 3", "proof": "p", "sites": [], "rationale": "r"}])
+        self.assertFalse(self.record.exists())
 
 
 if __name__ == "__main__":
