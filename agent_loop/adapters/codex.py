@@ -23,6 +23,15 @@ class CodexAdapter(Adapter):
         budget: Budget,
     ) -> AgentResult:
         self._check_sandbox(sandbox)
+        if self.jail is not None:
+            # The CLI is handed host paths - the schema and last-message files
+            # in a temp dir, and --cd - and the jail mounts none of them.  A
+            # silently unjailed codex worker is the one thing worse than this.
+            return AgentResult(
+                "refused", None, None,
+                "the codex adapter cannot run in a jail: it passes host paths "
+                "(--output-schema, --output-last-message, --cd) to the CLI",
+            )
         workspace = Path(tempfile.mkdtemp(prefix="agent-loop-codex-"))
         schema_path = workspace / "schema.json"
         message_path = workspace / "last-message.txt"

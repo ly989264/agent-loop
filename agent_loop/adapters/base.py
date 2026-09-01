@@ -21,8 +21,9 @@ import subprocess
 import time
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Dict, List, Mapping, Optional, Sequence, Tuple
+from typing import Any, Callable, Dict, List, Mapping, Optional, Sequence, Tuple
 
+from .. import jail as jail_module
 from ..config import Budget
 from ..environment import agent_environment
 from ..schemas import validate
@@ -41,7 +42,16 @@ class AgentResult:
     raw_tail: str
 
 
-def _terminate(process: "subprocess.Popen") -> None:
+def _terminate(
+    process: "subprocess.Popen", on_kill: Optional[Callable[[], None]] = None
+) -> None:
+    """End the process group, and whatever the process is only a client of.
+
+    ``docker run`` is a client: killing it leaves the container running, so a
+    jailed command needs ``on_kill`` for the caps to bound anything at all.
+    """
+    if on_kill is not None:
+        on_kill()
     try:
         os.killpg(process.pid, signal.SIGTERM)
     except (ProcessLookupError, PermissionError):
@@ -63,6 +73,7 @@ def bounded_run(
     stdin_text: str,
     budget: Budget,
     cwd: Path,
+    on_kill: Optional[Callable[[], None]] = None,
 ) -> Tuple[str, int, str]:
     """Run ``argv`` under the budget.  Returns (status, returncode, raw_tail).
 
@@ -103,14 +114,14 @@ def bounded_run(
         except OSError as exc:
             # An agent binary that exits before reading its bundle breaks the
             # pipe; that is a refusal to answer, not a crash of the round.
-            _terminate(process)
+            _terminate(process, on_kill)
             return "refused", -1, "%s did not read its bundle: %s" % (argv[0], exc)
         descriptor = process.stdout.fileno()
         selector.register(descriptor, selectors.EVENT_READ)
         while True:
             now = time.monotonic()
             if now - started > budget.wall_s or now - last_event > budget.silence_s:
-                _terminate(process)
+                _terminate(process, on_kill)
                 return "timeout", -1, tail()
             if not selector.select(timeout=0.5):
                 if process.poll() is not None:
@@ -126,11 +137,11 @@ def bounded_run(
                 keep(line.decode("utf-8", "replace"))
         while process.poll() is None:
             if time.monotonic() - started > budget.wall_s:
-                _terminate(process)
+                _terminate(process, on_kill)
                 return "timeout", -1, tail()
             time.sleep(0.05)
     except BaseException:
-        _terminate(process)
+        _terminate(process, on_kill)
         raise
     finally:
         selector.close()
@@ -200,10 +211,33 @@ class Adapter:
         model: Optional[str] = None,
         cwd: Optional[Path] = None,
         allowed_tools: Sequence[str] = (),
+        jail: Optional[jail_module.Jail] = None,
     ) -> None:
         self.model = model
         self.cwd = Path(cwd) if cwd is not None else Path.cwd()
         self.allowed_tools = list(allowed_tools)
+        self.jail = jail
+
+    def bounded(
+        self, argv: Sequence[str], *, stdin_text: str, budget: Budget
+    ) -> Tuple[str, int, str]:
+        """Start the agent, in the jail if this role has one.
+
+        The bounded runner is unchanged either way: the same wall and silence
+        caps, the same process group, the same byte-capped tail.  What changes
+        is what the process can reach, and that killing it also kills the
+        container it is only a client of.
+        """
+        if self.jail is None:
+            return bounded_run(argv, stdin_text=stdin_text, budget=budget, cwd=self.cwd)
+        name = jail_module.container_name()
+        return bounded_run(
+            jail_module.docker_argv(self.jail, argv, mount=self.cwd, name=name),
+            stdin_text=stdin_text,
+            budget=budget,
+            cwd=self.cwd,
+            on_kill=lambda: jail_module.kill(name),
+        )
 
     def run(
         self,

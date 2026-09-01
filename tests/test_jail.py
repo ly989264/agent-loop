@@ -2,13 +2,21 @@
 
 from __future__ import annotations
 
+import contextlib
+import io
+import json
 import os
 import unittest
 from pathlib import Path
 
-from agent_loop import jail as jail_module
+from agent_loop import jail as jail_module, round as round_module
+from agent_loop.adapters import build
+from agent_loop.config import AgentSpec, Budget
 from agent_loop.environment import PINNED
 from agent_loop.errors import ConfigError
+from agent_loop.schemas import WORKER_OUTPUT_SCHEMA
+
+from support import cleanup, git_init, make_repo, write_script
 
 
 def flags(argv, flag):
@@ -93,6 +101,177 @@ class ParseTest(unittest.TestCase):
             with self.assertRaises(ConfigError) as caught:
                 jail_module.parse(value)
             self.assertIn(expected, str(caught.exception))
+
+
+ANSWER = {
+    "diff_applied": True,
+    "test_path": "project/tests/test_thing.py",
+    "mutation_evidence": {"reverted_command": "git stash && pytest",
+                          "observed_failure_line": "E assert"},
+    "status": "done",
+    "reason": "",
+}
+
+# A `docker` that records its argv, then does inside the "container" what the
+# jailed command would have done outside it.  No image is pulled and no daemon
+# is spoken to, so the test is hermetic.
+FAKE_DOCKER = """\
+#!/usr/bin/env python3
+import json, os, sys
+argv = sys.argv[1:]
+with open(os.environ["JAIL_RECORD"], "a") as handle:
+    handle.write(json.dumps(argv) + "\\n")
+if argv[0] == "kill":
+    sys.exit(0)
+sys.stdin.read()
+open("project/fixed.txt", "w").write("fixed\\n")
+print(%s)
+"""
+
+SLEEPING_DOCKER = """\
+#!/usr/bin/env python3
+import json, os, sys, time
+argv = sys.argv[1:]
+with open(os.environ["JAIL_RECORD"], "a") as handle:
+    handle.write(json.dumps(argv) + "\\n")
+if argv[0] == "kill":
+    sys.exit(0)
+sys.stdin.read()
+time.sleep(120)
+"""
+
+JAIL_CONFIG = """
+branch: main
+backlog: .agent-loop/backlog.yaml
+worktree_root: .agent-loop/worktrees
+ledger: .agent-loop/ledger.jsonl
+protected_paths:
+  - project/catalog.json
+verify:
+  hermetic:
+    cwd: project
+    command: "true"
+agents:
+  worker:
+    - shell:%s
+caps:
+  worker:
+    wall_s: 60
+    silence_s: 30
+    max_tokens: 1000
+notify:
+  - target: file
+    path: .agent-loop/notifications.log
+levels:
+  hermetic: L1
+jail:
+  image: jail:local
+"""
+
+JAIL_BACKLOG = """
+items:
+  - id: an-item
+    group: g
+    statement: the probe fails while this is open
+    cost_class: hermetic
+    selectable: true
+    sites: []
+    design_doc: "docs/design.md 1"
+    probe: "test -f fixed.txt"
+    proof: "the probe exits 0 once the file is there"
+"""
+
+
+class FakeDockerTest(unittest.TestCase):
+    """Base: a `docker` on PATH that records what it was asked to run."""
+
+    docker = FAKE_DOCKER % repr(json.dumps(ANSWER))
+
+    def setUp(self):
+        self.path = os.environ["PATH"]
+        self.root = make_repo(config="branch: main\n", backlog=JAIL_BACKLOG)
+        (self.root / "bin").mkdir()
+        write_script(self.root, "bin/docker", self.docker)
+        os.environ["PATH"] = "%s:%s" % (self.root / "bin", self.path)
+        self.record = self.root / "docker-argv.jsonl"
+        os.environ["JAIL_RECORD"] = str(self.record)
+
+    def tearDown(self):
+        os.environ["PATH"] = self.path
+        os.environ.pop("JAIL_RECORD", None)
+        cleanup(self.root)
+
+    def recorded(self):
+        return [json.loads(line) for line in self.record.read_text().splitlines()]
+
+
+class JailedWorkerRoundTest(FakeDockerTest):
+    def test_a_jailed_round_runs_the_worker_in_a_container_on_its_worktree_alone(self):
+        script = write_script(self.root, "agent.py", "#!/bin/sh\ncat >/dev/null\n")
+        (self.root / ".agent-loop" / "config.yaml").write_text(
+            JAIL_CONFIG % script, encoding="utf-8")
+        git_init(self.root)
+        with contextlib.redirect_stdout(io.StringIO()):
+            outcome = round_module.run_once(self.root / ".agent-loop" / "config.yaml")
+        self.assertEqual(outcome.state, "PR_READY", outcome.reason)
+        run = self.recorded()[0]
+        worktree = (self.root / ".agent-loop" / "worktrees" / "an-item").resolve()
+        self.assertEqual(
+            [run[index + 1] for index, token in enumerate(run) if token == "--volume"],
+            ["%s:/workspace" % worktree],
+        )
+        # the shell adapter's own argv, unchanged, after the image
+        self.assertEqual(run[run.index("jail:local") + 1:], [str(script), "worker", "worktree-write"])
+
+    def test_without_the_key_nothing_is_containerised(self):
+        script = write_script(
+            self.root, "agent.py",
+            "#!/usr/bin/env python3\nimport sys\nsys.stdin.read()\n"
+            'open("project/fixed.txt", "w").write("fixed\\n")\n'
+            "print(%s)\n" % repr(json.dumps(ANSWER)),
+        )
+        (self.root / ".agent-loop" / "config.yaml").write_text(
+            JAIL_CONFIG.replace("jail:\n  image: jail:local\n", "") % script, encoding="utf-8")
+        git_init(self.root)
+        with contextlib.redirect_stdout(io.StringIO()):
+            outcome = round_module.run_once(self.root / ".agent-loop" / "config.yaml")
+        self.assertEqual(outcome.state, "PR_READY", outcome.reason)
+        self.assertFalse(self.record.exists())
+
+
+class KillPathTest(FakeDockerTest):
+    docker = SLEEPING_DOCKER
+
+    def test_a_timed_out_jailed_command_is_killed_by_name_not_only_as_a_client(self):
+        # `docker run` is a client; killing its process group would leave the
+        # container running and the caps would bound nothing.
+        script = write_script(self.root, "agent.py", "#!/bin/sh\ncat >/dev/null\n")
+        adapter = build(
+            AgentSpec.parse("shell:%s" % script),
+            cwd=self.root,
+            jail=jail_module.Jail(image="jail:local"),
+        )
+        result = adapter.run(
+            "worker", "bundle", WORKER_OUTPUT_SCHEMA, "worktree-write",
+            Budget(wall_s=30, silence_s=1, max_tokens=10),
+        )
+        self.assertEqual(result.status, "timeout")
+        run, killed = self.recorded()
+        name = run[run.index("--name") + 1]
+        self.assertEqual(killed, ["kill", name])
+
+
+class JailedProbeTest(FakeDockerTest):
+    def test_a_plan_run_probe_goes_through_the_jail_at_the_verify_cwd(self):
+        exit_code, output = jail_module.run_command(
+            jail_module.Jail(image="jail:local"), "exit 3", self.root, "project", timeout=30
+        )
+        run = self.recorded()[0]
+        self.assertEqual(
+            [run[index + 1] for index, token in enumerate(run) if token == "--workdir"],
+            ["/workspace/project"],
+        )
+        self.assertEqual(run[run.index("jail:local") + 1:], ["sh", "-c", "exit 3"])
 
 
 if __name__ == "__main__":

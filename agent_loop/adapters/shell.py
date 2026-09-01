@@ -9,7 +9,7 @@ from __future__ import annotations
 from typing import Any, Mapping
 
 from ..config import Budget
-from .base import Adapter, AgentResult, bounded_run, extract_json, schema_instruction
+from .base import Adapter, AgentResult, extract_json, schema_instruction
 
 
 class ShellAdapter(Adapter):
@@ -28,9 +28,7 @@ class ShellAdapter(Adapter):
             return AgentResult("refused", None, None, "shell adapter needs shell:<program>")
         argv = [self.model, role, sandbox]
         stdin_text = "%s\n\n%s\n" % (bundle, schema_instruction(schema))
-        status, returncode, tail = bounded_run(
-            argv, stdin_text=stdin_text, budget=budget, cwd=self.cwd
-        )
+        status, returncode, tail = self.bounded(argv, stdin_text=stdin_text, budget=budget)
         if status == "timeout":
             return AgentResult("timeout", None, None, tail)
         if returncode != 0:

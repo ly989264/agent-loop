@@ -241,6 +241,11 @@ def _worker_round(
             config.ladder("worker")[0],
             cwd=space.tree,
             allowed_tools=allowed_tools([config.verify_for(item.cost_class).command, item.probe]),
+            # Stage 6: the worker is the role that writes, so it is the role
+            # the jail is for.  The reviewer reads a published diff read-only
+            # and verify's commands are the operator's own data; both stay
+            # host-side.
+            jail=config.jail,
         )
         result = invoke_with_one_repair(
             adapter,

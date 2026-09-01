@@ -13,7 +13,7 @@ import json
 from typing import Any, Mapping
 
 from ..config import Budget
-from .base import Adapter, AgentResult, bounded_run, extract_json, schema_instruction
+from .base import Adapter, AgentResult, extract_json, schema_instruction
 
 
 class ClaudeCodeAdapter(Adapter):
@@ -37,7 +37,7 @@ class ClaudeCodeAdapter(Adapter):
             # so the commands the round itself will run are named here.
             argv += ["--allowedTools", ",".join(self.allowed_tools)]
         prompt = "%s\n\n%s\n" % (bundle, schema_instruction(schema))
-        status, returncode, tail = bounded_run(argv, stdin_text=prompt, budget=budget, cwd=self.cwd)
+        status, returncode, tail = self.bounded(argv, stdin_text=prompt, budget=budget)
         if status == "timeout":
             return AgentResult("timeout", None, None, tail)
         if returncode != 0:
