@@ -113,3 +113,42 @@ class ConfigTest(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+JAIL = """
+jail:
+  image: agent-loop-jail:local
+  credentials_env:
+    - ANTHROPIC_API_KEY
+  memory: 4g
+"""
+
+
+class JailKeyTest(unittest.TestCase):
+    """Stage 6: the optional `jail` key, and what a config without one still is."""
+
+    def tearDown(self):
+        cleanup(self.root)
+
+    def load(self, text=CONFIG):
+        self.root = make_repo(config=text)
+        return config_module.load(self.root / ".agent-loop" / "config.yaml")
+
+    def test_a_config_without_the_key_has_no_jail(self):
+        self.assertIsNone(self.load().jail)
+
+    def test_the_key_is_read(self):
+        jail = self.load(CONFIG + JAIL).jail
+        self.assertEqual(jail.image, "agent-loop-jail:local")
+        self.assertEqual(jail.credentials_env, ("ANTHROPIC_API_KEY",))
+        self.assertEqual(jail.memory, "4g")
+
+    def test_the_image_is_required(self):
+        with self.assertRaises(ConfigError) as caught:
+            self.load(CONFIG + "\njail:\n  memory: 4g\n")
+        self.assertIn("image", str(caught.exception))
+
+    def test_an_unknown_sub_key_is_refused(self):
+        with self.assertRaises(ConfigError) as caught:
+            self.load(CONFIG + JAIL + "  mounts:\n    - /etc\n")
+        self.assertIn("mounts", str(caught.exception))

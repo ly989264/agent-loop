@@ -14,6 +14,7 @@ from typing import Any, Dict, List, Mapping, Optional, Tuple
 
 import yaml
 
+from . import jail as jail_module
 from . import scm as scm_module
 from .errors import ConfigError
 
@@ -31,6 +32,7 @@ KEYS = frozenset(
         "levels",
         "scm",
         "plan_sources",
+        "jail",
     }
 )
 ROLES = ("planner", "worker", "reviewer", "diagnoser")
@@ -105,6 +107,8 @@ class Config:
     scm: str = scm_module.DEFAULT
     # File globs `agent-loop plan` may read into the planner's bundle, read-only.
     plan_sources: Tuple[str, ...] = ()
+    # Stage 6: absent means the worker and plan-run probes stay host-side.
+    jail: Optional[jail_module.Jail] = None
     # Continuous mode; §3 "Modes and back-pressure". Defaults in CAP_DEFAULTS.
     open_prs: int = CAP_DEFAULTS["open_prs"]
     non_progress_rounds: int = CAP_DEFAULTS["non_progress_rounds"]
@@ -273,6 +277,7 @@ def load(path: os.PathLike) -> Config:
         levels=dict(levels_document),
         scm=str(publisher),
         plan_sources=tuple(plan_sources),
+        jail=jail_module.parse(document.get("jail")),
         open_prs=cap_ints["open_prs"],
         non_progress_rounds=cap_ints["non_progress_rounds"],
         poll_s=cap_ints["poll_s"],
